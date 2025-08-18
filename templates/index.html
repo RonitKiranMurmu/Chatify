@@ -1,0 +1,353 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PeerPulse</title>
+
+    <!-- Libs -->
+    <script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.5/client-dist/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/dayjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/relativeTime.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/isToday.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/isYesterday.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+    <!-- Softer theme -->
+    <style>
+        :root {
+            --bg-1: #f5f7fa;
+            --bg-2: #e8eef5;
+            --card: #ffffff;
+            --text: #1f2937;
+            --muted: #6b7280;
+            --brand: #3b82f6;      /* blue-500 */
+            --brand-strong: #2563eb; /* blue-600 */
+            --sent: #dbeafe;       /* blue-100 */
+            --recv: #f3f4f6;       /* gray-100 */
+            --border: #e5e7eb;     /* gray-200 */
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, var(--bg-1), var(--bg-2));
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+
+        /* Containers */
+        #chat-container, #login-container {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+            border: 1px solid var(--border);
+        }
+
+        #chat-area {
+            height: 70vh;
+            overflow-y: auto;
+            background: #fff;
+            border-radius: 12px;
+            padding: 14px;
+            border: 1px solid var(--border);
+        }
+
+        /* Messages */
+        .message {
+            max-width: 75%;
+            margin: 8px 12px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            position: relative;
+            word-wrap: break-word;
+            line-height: 1.45;
+        }
+        .message.sent {
+            background: var(--sent);
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
+        .message.received {
+            background: var(--recv);
+            border-bottom-left-radius: 5px;
+        }
+
+        .message .timestamp {
+            font-size: 0.72rem;
+            color: var(--muted);
+            text-align: right;
+            margin-top: 6px;
+        }
+        .message .user-id {
+            font-weight: 600;
+            font-size: 0.85rem;
+            margin-right: 6px;
+            color: #111827;
+        }
+
+        /* Inputs & Buttons */
+        input[type="text"], input[type="file"] {
+            border-radius: 24px;
+            background: #f9fafb;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 14px;
+            outline: none;
+        }
+        #send-button, #file-button, #login-button {
+            border-radius: 24px;
+            background: var(--brand);
+            color: #fff;
+            border: none;
+            padding: 10px 16px;
+            transition: background 0.15s ease;
+        }
+        #send-button:hover, #file-button:hover, #login-button:hover {
+            background: var(--brand-strong);
+        }
+
+        #status {
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+
+        /* Scrollbar */
+        #chat-area::-webkit-scrollbar { width: 8px; }
+        #chat-area::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login -->
+    <div id="login-container" class="max-w-md mx-auto mt-10">
+        <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Join PeerPulse</h2>
+        <input type="text" id="user-id-input" placeholder="Your ID (e.g., user1)" class="w-full mb-4">
+        <button id="login-button" class="w-full">Join Chat</button>
+    </div>
+
+    <!-- Chat -->
+    <div id="chat-container" class="max-w-2xl mx-auto mt-10 hidden">
+        <div id="chat-area" class="mb-4"></div>
+
+        <div class="flex items-center space-x-2">
+            <input type="text" id="message-input" placeholder="Type a message..." class="flex-1">
+            <button id="send-button">Send</button>
+        </div>
+
+        <div class="flex items-center space-x-2 mt-2">
+            <input type="file" id="file-input" accept="image/*,text/plain" class="flex-1">
+            <button id="file-button">Send File</button>
+        </div>
+
+        <div id="status" class="mt-2">
+            Disconnected | Server: <span id="server-info"></span>
+        </div>
+    </div>
+
+    <script>
+        // ---- Day.js plugins ----
+        dayjs.extend(dayjs_plugin_relativeTime);
+        dayjs.extend(dayjs_plugin_isToday);
+        dayjs.extend(dayjs_plugin_isYesterday);
+
+        // ---- Socket setup ----
+        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const socketUrl = isLocal ? 'http://localhost:5000' : 'https://peerpulse-plgh.onrender.com';
+        const socket = io(socketUrl, {
+            transports: ['websocket'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 10000
+        });
+
+        // ---- DOM refs ----
+        const loginContainer = document.getElementById("login-container");
+        const chatContainer = document.getElementById("chat-container");
+        const userIdInput = document.getElementById("user-id-input");
+        const messageInput = document.getElementById("message-input");
+        const fileInput = document.getElementById("file-input");
+        const loginButton = document.getElementById("login-button");
+        const sendButton = document.getElementById("send-button");
+        const fileButton = document.getElementById("file-button");
+        const statusDiv = document.getElementById("status");
+        const serverInfo = document.getElementById("server-info");
+        const chatArea = document.getElementById("chat-area");
+
+        const encryptionKey = "peerpulse-secret-2025";
+
+        serverInfo.textContent = socketUrl;
+        userIdInput.value = localStorage.getItem("userId") || "";
+
+        // ---- Helpers ----
+        function toSeconds(rawTs) {
+            const n = Number(rawTs);
+            if (!isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
+            return n >= 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+        }
+
+        function formatTimestamp(rawTs) {
+            const ts = toSeconds(rawTs);
+            const date = new Date(ts * 1000);
+            if (dayjs(date).isToday()) {
+                return `Today, ${dayjs(date).format('h:mm A')}`;
+            } else if (dayjs(date).isYesterday()) {
+                return `Yesterday, ${dayjs(date).format('h:mm A')}`;
+            }
+            return dayjs(date).format('MMM D, YYYY, h:mm A');
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
+            const wrapper = document.createElement('div');
+            wrapper.className = `message ${isSent ? 'sent' : 'received'}`;
+            wrapper.innerHTML =
+                `<span class="user-id">${escapeHtml(user_id)}:</span> ${contentHtml}
+                 <div class="timestamp">${formatTimestamp(timestamp)}</div>`;
+            chatArea.appendChild(wrapper);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // ---- Login ----
+        loginButton.onclick = () => {
+            const userId = userIdInput.value.trim();
+            if (userId) {
+                localStorage.setItem("userId", userId);
+                socket.emit('join', userId); // Emit join event
+                loginContainer.classList.add("hidden");
+                chatContainer.classList.remove("hidden");
+            } else {
+                alert("Please enter a valid User ID.");
+            }
+        };
+
+        // ---- Socket events ----
+        socket.on("connect", () => {
+            statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+            statusDiv.classList.remove("text-red-400");
+            statusDiv.classList.add("text-green-600");
+            appendMessage({
+                user_id: "System",
+                contentHtml: "Connected to server",
+                isSent: false,
+                timestamp: Math.floor(Date.now() / 1000)
+            });
+            socket.emit("request_blockchain");
+        });
+
+        socket.on("connect_error", (error) => {
+            console.error('WebSocket connection failed:', error);
+            statusDiv.textContent = `Connection Failed: ${error.message} | Server: ${socketUrl}`;
+            statusDiv.classList.remove("text-green-600");
+            statusDiv.classList.add("text-red-400");
+        });
+
+        socket.on("status", (data) => {
+            statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
+            if (data.message === "Connected") {
+                statusDiv.classList.add("text-green-600");
+                statusDiv.classList.remove("text-red-400");
+            } else {
+                statusDiv.classList.add("text-red-400");
+                statusDiv.classList.remove("text-green-600");
+            }
+        });
+
+        socket.on("message", (data) => {
+            const decrypted = CryptoJS.AES.decrypt(data.message || "", encryptionKey).toString(CryptoJS.enc.Utf8);
+            const userId = localStorage.getItem("userId") || "Unknown";
+            const isSent = data.user_id === userId;
+
+            let contentHtml;
+            if (data.type === "file") {
+                const safeName = escapeHtml(data.filename || "file");
+                const safeHref = escapeHtml(decrypted || "#");
+                contentHtml = `<a href="${safeHref}" download="${safeName}" class="underline" style="color: var(--brand-strong);">Download ${safeName}</a>`;
+            } else {
+                contentHtml = escapeHtml(decrypted || "");
+            }
+
+            appendMessage({
+                user_id: data.user_id || "Unknown",
+                contentHtml,
+                isSent,
+                timestamp: data.timestamp
+            });
+        });
+
+        socket.on("disconnect", () => {
+            statusDiv.textContent = `Disconnected | Server: ${socketUrl}`;
+            statusDiv.classList.remove("text-green-600");
+            statusDiv.classList.add("text-red-400");
+        });
+
+        // ---- Send text ----
+        sendButton.onclick = () => {
+            const userId = localStorage.getItem("userId") || "Unknown";
+            const message = messageInput.value.trim();
+            if (message && userId && message.length <= 200) {
+                const encrypted = CryptoJS.AES.encrypt(message, encryptionKey).toString();
+                const msgData = {
+                    user_id: userId,
+                    message: encrypted,
+                    msg_id: crypto.randomUUID(),
+                    type: "text",
+                    timestamp: Math.floor(Date.now() / 1000)
+                };
+                socket.emit("message", msgData);
+                messageInput.value = "";
+            } else {
+                alert("Please enter a valid message (max 200 characters).");
+            }
+        };
+
+        // Enter to send
+        messageInput.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") sendButton.click();
+        });
+
+        // ---- Send file ----
+        fileButton.onclick = () => {
+            const userId = localStorage.getItem("userId") || "Unknown";
+            const file = fileInput.files[0];
+            if (file && userId && file.size <= 1 * 1024 * 1024) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const encrypted = CryptoJS.AES.encrypt(reader.result, encryptionKey).toString();
+                    const msgData = {
+                        user_id: userId,
+                        message: encrypted,
+                        msg_id: crypto.randomUUID(),
+                        type: "file",
+                        filename: file.name,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    };
+                    socket.emit("message", msgData);
+                    fileInput.value = "";
+                };
+                reader.readAsDataURL(file);
+            } else {
+                alert("Please select a valid file (max 1MB).");
+            }
+        };
+    </script>
+</body>
+</html>
+```
