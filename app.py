@@ -11,7 +11,7 @@ import uuid
 import time
 import hashlib
 import jsonpickle
-from threading import Lock
+from threading import Lock, Thread
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,6 +29,7 @@ PeerPulse — Flask-SocketIO P2P chat with Blockchain + MongoDB persistence
     PORT: Render-assigned port (default: 5000 locally)
     MONGO_URI: MongoDB Atlas URI
     SECRET_KEY: Flask secret key for session security
+    RENDER: Set to 'true' on Render.com
 """
 
 # Logging
@@ -38,12 +39,12 @@ logger = logging.getLogger("peerpulse")
 # Flask and SocketIO
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=60, ping_interval=25, logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=120, ping_interval=40, transports=['websocket'], logger=True, engineio_logger=True)
 
 # MongoDB Setup
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-mongo = MongoClient(MONGO_URI)
+mongo = MongoClient(MONGO_URI, maxPoolSize=50, retryWrites=True, retryReads=True)
 db = mongo[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
@@ -77,7 +78,7 @@ def load_peers():
     try:
         with open("peers.json", "r") as f:
             peers = json.load(f)
-            if os.environ.get("RENDER"):
+            if os.environ.get("RENDER") == "true":
                 peers = [p.replace("http://localhost", "https://chatify-fcw1.onrender.com/") for p in peers]
             return peers
     except FileNotFoundError:
@@ -97,7 +98,7 @@ class Blockchain:
     def compute_hash(block: dict) -> str:
         block_copy = {k: v for k, v in block.items() if k != "hash"}
         block_string = json.dumps(block_copy, sort_keys=True)
-        return hashlib.sha256(block_string.encode()).hexdigest()
+        return hashlib.sha256(block_string.encode('utf-8')).hexdigest()
 
     def create_genesis_block(self):
         base = {
@@ -116,7 +117,7 @@ class Blockchain:
         start_time = time.time()
         block["nonce"] = 0
         computed_hash = self.compute_hash(block)
-        while not computed_hash.startswith("0000"):
+        while not computed_hash.startswith("00"):  # Reduced difficulty for performance
             block["nonce"] += 1
             computed_hash = self.compute_hash(block)
             if time.time() - start_time > 5:
@@ -125,6 +126,8 @@ class Blockchain:
         return computed_hash
 
     def add_transaction(self, user_id, message, msg_type="text", filename="", ts=None):
+        if isinstance(message, str):
+            message = message.encode('utf-8', errors='ignore').decode('utf-8')
         self.pending_transactions.append({
             "user_id": user_id,
             "message": message,
@@ -153,6 +156,9 @@ class Blockchain:
             logger.debug(f"Mined block: {block['index']}")
             return block
 
+    def async_mine_block(self):
+        Thread(target=self.mine_block).start()
+
     def _persist_block(self, block: dict):
         try:
             blocks_col.insert_one(block)
@@ -172,7 +178,7 @@ class Blockchain:
         g = chain[0]
         if g.get("previous_hash") != "0":
             return False
-        if not self.compute_hash(g).startswith("0000"):
+        if not self.compute_hash(g).startswith("00"):
             return False
         if g.get("hash") != self.compute_hash(g):
             return False
@@ -181,7 +187,7 @@ class Blockchain:
             prev = chain[i - 1]
             if current.get("previous_hash") != prev.get("hash"):
                 return False
-            if not self.compute_hash(current).startswith("0000"):
+            if not self.compute_hash(current).startswith("00"):
                 return False
             if current.get("hash") != self.compute_hash(current):
                 return False
@@ -212,7 +218,7 @@ processed_messages = set()
 
 def connect_to_peers(peer_ports, host="localhost"):
     for p in peer_ports:
-        peer_url = f"http://{host}:{p}" if not os.environ.get("RENDER") else f"https://chatify-fcw1.onrender.com/"
+        peer_url = f"http://{host}:{p}" if os.environ.get("RENDER") != "true" else f"https://chatify-fcw1.onrender.com/"
         if peer_url in peers:
             continue
         peers.append(peer_url)
@@ -221,7 +227,7 @@ def connect_to_peers(peer_ports, host="localhost"):
             client.connect(peer_url, transports=['websocket'])
             peer_clients.append(client)
             logger.debug(f"Connected to peer: {peer_url}")
-            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain))
+            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain, safe=True))
         except Exception as e:
             logger.error(f"Failed to connect to peer {peer_url}: {e}")
 
@@ -237,7 +243,7 @@ def handle_connect():
     logger.debug("Client connected")
     emit("status", {"message": "Connected"})
     try:
-        recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(50))
+        recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))  # Reduced limit
         for m in reversed(recent):
             emit("message", m)
     except Exception as e:
@@ -270,6 +276,8 @@ def handle_message(data):
     start_time = time.time()
     user_id = data.get("user_id", "Unknown")
     msg = data.get("message", "")
+    if isinstance(msg, str):
+        msg = msg.encode('utf-8', errors='ignore').decode('utf-8')
     msg_id = data.get("msg_id", str(uuid.uuid4()))
     msg_type = data.get("type", "text")
     filename = data.get("filename", "")
@@ -285,7 +293,7 @@ def handle_message(data):
     try:
         messages_col.insert_one({
             "user_id": user_id,
-            "message": msg,  # Store encrypted message
+            "message": msg,
             "msg_id": msg_id,
             "type": msg_type,
             "filename": filename,
@@ -296,9 +304,7 @@ def handle_message(data):
         return
 
     blockchain.add_transaction(user_id, msg, msg_type, filename, ts)
-    block = blockchain.mine_block()
-    if block:
-        logger.debug(f"Mined block: {block['index']}")
+    blockchain.async_mine_block()
 
     emit("message", {
         "user_id": user_id,
@@ -319,7 +325,7 @@ def handle_message(data):
                 "filename": filename,
                 "timestamp": ts
             })
-            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain))
+            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain, safe=True))
             logger.debug("Forwarded message and blockchain to peer")
         except Exception as e:
             logger.error(f"Failed to forward to peer: {e}")
@@ -330,30 +336,37 @@ def handle_message(data):
 @socketio.on("sync_blockchain")
 def handle_sync_blockchain(data):
     try:
-        received_chain = jsonpickle.decode(data)
+        received_chain = jsonpickle.decode(data, safe=True)
+        for block in received_chain:
+            for tx in block.get("transactions", []):
+                if isinstance(tx.get("message"), str):
+                    tx["message"] = tx["message"].encode('utf-8', errors='ignore').decode('utf-8')
+        if blockchain.replace_chain(received_chain):
+            logger.info("Blockchain updated from peer")
+            for block in blockchain.chain:
+                for tx in block.get("transactions", []):
+                    mid = str(uuid.uuid4())
+                    processed_messages.add(mid)
+                    emit("message", {
+                        "user_id": tx.get("user_id", "Unknown"),
+                        "message": tx.get("message", ""),
+                        "msg_id": mid,
+                        "type": tx.get("type", "text"),
+                        "filename": tx.get("filename", ""),
+                        "timestamp": tx.get("timestamp", time.time())
+                    })
     except Exception as e:
         logger.error(f"Failed to decode received chain: {e}")
-        return
-
-    if blockchain.replace_chain(received_chain):
-        logger.info("Blockchain updated from peer")
-        for block in blockchain.chain:
-            for tx in block.get("transactions", []):
-                mid = str(uuid.uuid4())
-                processed_messages.add(mid)
-                emit("message", {
-                    "user_id": tx.get("user_id", "Unknown"),
-                    "message": tx.get("message", ""),
-                    "msg_id": mid,
-                    "type": tx.get("type", "text"),
-                    "filename": tx.get("filename", ""),
-                    "timestamp": tx.get("timestamp", time.time())
-                })
 
 @socketio.on("request_blockchain")
 def handle_request_blockchain():
     try:
-        emit("sync_blockchain", jsonpickle.encode(blockchain.chain))
+        chain_copy = blockchain.chain.copy()
+        for block in chain_copy:
+            for tx in block.get("transactions", []):
+                if isinstance(tx.get("message"), str):
+                    tx["message"] = tx["message"].encode('utf-8', errors='ignore').decode('utf-8')
+        emit("sync_blockchain", jsonpickle.encode(chain_copy, safe=True))
     except Exception as e:
         logger.error(f"Failed to send blockchain: {e}")
 

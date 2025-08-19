@@ -164,9 +164,10 @@
         const socket = io(socketUrl, {
             transports: ['websocket'],
             reconnection: true,
-            reconnectionAttempts: 5,
+            reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,
-            timeout: 10000
+            reconnectionDelayMax: 5000,
+            timeout: 20000
         });
 
         // ---- DOM refs ----
@@ -270,17 +271,26 @@
         });
 
         socket.on("message", (data) => {
-            const decrypted = CryptoJS.AES.decrypt(data.message || "", encryptionKey).toString(CryptoJS.enc.Utf8);
+            let messageContent = data.message || "";
             const userId = localStorage.getItem("userId") || "Unknown";
             const isSent = data.user_id === userId;
+            const isSystem = data.user_id === "System";
+
+            if (!isSystem) {
+                try {
+                    messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+                } catch (e) {
+                    console.error("Decryption failed:", e);
+                    messageContent = "[Decryption Error]";
+                }
+            }
 
             let contentHtml;
             if (data.type === "file") {
                 const safeName = escapeHtml(data.filename || "file");
-                const safeHref = escapeHtml(decrypted || "#");
-                contentHtml = `<a href="${safeHref}" download="${safeName}" class="underline" style="color: var(--brand-strong);">Download ${safeName}</a>`;
+                contentHtml = `<a href="data:application/octet-stream;base64,${escapeHtml(messageContent)}" download="${safeName}" class="underline" style="color: var(--brand-strong);">Download ${safeName}</a>`;
             } else {
-                contentHtml = escapeHtml(decrypted || "");
+                contentHtml = escapeHtml(messageContent);
             }
 
             appendMessage({
@@ -329,7 +339,8 @@
             if (file && userId && file.size <= 1 * 1024 * 1024) {
                 const reader = new FileReader();
                 reader.onload = () => {
-                    const encrypted = CryptoJS.AES.encrypt(reader.result, encryptionKey).toString();
+                    const base64Data = reader.result.split(',')[1];
+                    const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey).toString();
                     const msgData = {
                         user_id: userId,
                         message: encrypted,
