@@ -40,16 +40,19 @@ def init_mongo():
         messages_col = db["messages"]
         blocks_col = db["blocks"]
         peers_col = db["peers"]
-        messages_col.create_index([("msg_id", ASCENDING)], unique=True)
-        messages_col.create_index([("timestamp", DESCENDING)])
-        blocks_col.create_index([("index", ASCENDING)], unique=True)
-        blocks_col.create_index([("previous_hash", ASCENDING)])
+        try:
+            messages_col.create_index([("msg_id", ASCENDING)], unique=True)
+            messages_col.create_index([("timestamp", DESCENDING)])
+            blocks_col.create_index([("index", ASCENDING)], unique=True)
+            blocks_col.create_index([("previous_hash", ASCENDING)])
+        except Exception as e:
+            logger.error(f"Failed to create indexes: {e}")
         logger.info("MongoDB connection established")
     except ConnectionFailure as e:
         logger.error(f"MongoDB connection failed: {e}")
         raise
 
-# Initialize SocketIO
+# Initialize SocketIO with gevent for WebSocket support
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
@@ -110,7 +113,8 @@ class Blockchain:
             "previous_hash": "0",
             "nonce": 0,
         }
-        base["hash"] = asyncio.get_event_loop().run_until_complete(self.proof_of_work(base))
+        loop = asyncio.get_event_loop()
+        base["hash"] = loop.run_until_complete(self.proof_of_work(base))
         self.chain.append(base)
         self._persist_block(base)
         logger.info("Genesis block created")
@@ -119,13 +123,13 @@ class Blockchain:
         start_time = time.time()
         block["nonce"] = 0
         computed_hash = await self.compute_hash(block)
-        while not computed_hash.startswith("00"):  # Reduced difficulty
+        while not computed_hash.startswith("00"):  # Reduced difficulty for performance
             block["nonce"] += 1
             computed_hash = await self.compute_hash(block)
             if time.time() - start_time > 5:
                 logger.warning("Proof-of-work timeout, using partial hash")
                 break
-            await asyncio.sleep(0)  # Yield control
+            await asyncio.sleep(0)  # Yield control to event loop
         return computed_hash
 
     def add_transaction(self, user_id, message, msg_type="text", filename="", ts=None):
@@ -213,7 +217,7 @@ class Blockchain:
             return False
 
 # Globals & Peer Clients
-port = int(os.environ.get("PORT", 5000))
+port = int(os.environ.get("PORT", 8000))
 blockchain = Blockchain()
 peers = []
 peer_clients = []
@@ -373,7 +377,7 @@ def handle_request_blockchain():
 
 # Main
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     peer_ports = load_peers() or []
     local_ip = get_local_ip()
     logger.info(f"Starting server on http://0.0.0.0:{port} (accessible at http://{local_ip}:{port})")
