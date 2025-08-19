@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -12,6 +13,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/relativeTime.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/isToday.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/plugin/isYesterday.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.3.2/uuid.min.js"></script>
 
     <!-- Tailwind CSS -->
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
@@ -148,7 +150,7 @@
         </div>
 
         <div id="status" class="mt-2">
-            Disconnected | Server: <span id="server-info"></span>
+            Connecting... | Server: <span id="server-info"></span>
         </div>
     </div>
 
@@ -279,6 +281,9 @@
             if (!isSystem) {
                 try {
                     messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+                    if (!messageContent) {
+                        messageContent = "[Empty or Invalid Message]";
+                    }
                 } catch (e) {
                     console.error("Decryption failed:", e);
                     messageContent = "[Decryption Error]";
@@ -316,7 +321,7 @@
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
-                    msg_id: crypto.randomUUID(),
+                    msg_id: uuidv4(),
                     type: "text",
                     timestamp: Math.floor(Date.now() / 1000)
                 };
@@ -344,7 +349,7 @@
                     const msgData = {
                         user_id: userId,
                         message: encrypted,
-                        msg_id: crypto.randomUUID(),
+                        msg_id: uuidv4(),
                         type: "file",
                         filename: file.name,
                         timestamp: Math.floor(Date.now() / 1000)
@@ -360,3 +365,4 @@
     </script>
 </body>
 </html>
+```

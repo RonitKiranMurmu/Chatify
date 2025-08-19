@@ -1,63 +1,65 @@
+import os
+import json
+import hashlib
+import asyncio
+import logging
+import uuid
+import time
+import socket
+from threading import Lock, Thread
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import ConnectionFailure
 import socketio as sio
-import logging
-import os
-import sys
-import socket
-import json
-import uuid
-import time
-import hashlib
-import jsonpickle
-from threading import Lock, Thread
 from dotenv import load_dotenv
 
-load_dotenv()
-
-"""
-PeerPulse — Flask-SocketIO P2P chat with Blockchain + MongoDB persistence
-- Messages and blocks are persisted to MongoDB
-- Supports P2P sync via Socket.IO client connections
-- Uses MongoDB Atlas for cloud database (via MONGO_URI)
-- Compatible with Render.com deployment using Gunicorn
-- Run examples:
-    python app.py 5000
-    python app.py 5001 5000
-- Environment Variables:
-    PORT: Render-assigned port (default: 5000 locally)
-    MONGO_URI: MongoDB Atlas URI
-    SECRET_KEY: Flask secret key for session security
-    RENDER: Set to 'true' on Render.com
-"""
-
-# Logging
+# Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("peerpulse")
 
-# Flask and SocketIO
+# Load environment variables
+load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=120, ping_interval=40, transports=['websocket'], logger=True, engineio_logger=True)
-
-# MongoDB Setup
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-mongo = MongoClient(MONGO_URI, maxPoolSize=50, retryWrites=True, retryReads=True)
-db = mongo[MONGO_DB]
-messages_col = db["messages"]
-blocks_col = db["blocks"]
-peers_col = db["peers"]
 
-# Indexes
-try:
-    messages_col.create_index([("msg_id", ASCENDING)], unique=True)
-    messages_col.create_index([("timestamp", DESCENDING)])
-    blocks_col.create_index([("index", ASCENDING)], unique=True)
-    blocks_col.create_index([("previous_hash", ASCENDING)])
-except Exception as e:
-    logger.error(f"Failed to create indexes: {e}")
+# Initialize MongoDB client after fork
+mongo_client = None
+db = None
+messages_col = None
+blocks_col = None
+peers_col = None
+
+def init_mongo():
+    global mongo_client, db, messages_col, blocks_col, peers_col
+    try:
+        mongo_client = MongoClient(MONGO_URI, maxPoolSize=50, retryWrites=True, retryReads=True, connectTimeoutMS=10000, serverSelectionTimeoutMS=10000)
+        db = mongo_client[MONGO_DB]
+        messages_col = db["messages"]
+        blocks_col = db["blocks"]
+        peers_col = db["peers"]
+        messages_col.create_index([("msg_id", ASCENDING)], unique=True)
+        messages_col.create_index([("timestamp", DESCENDING)])
+        blocks_col.create_index([("index", ASCENDING)], unique=True)
+        blocks_col.create_index([("previous_hash", ASCENDING)])
+        logger.info("MongoDB connection established")
+    except ConnectionFailure as e:
+        logger.error(f"MongoDB connection failed: {e}")
+        raise
+
+# Initialize SocketIO
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    ping_timeout=120,
+    ping_interval=40,
+    transports=['websocket'],
+    async_mode='gevent',
+    logger=True,
+    engineio_logger=True
+)
 
 # Thread lock for mining
 mine_lock = Lock()
@@ -95,10 +97,10 @@ class Blockchain:
             self.create_genesis_block()
 
     @staticmethod
-    def compute_hash(block: dict) -> str:
+    async def compute_hash(block: dict) -> str:
         block_copy = {k: v for k, v in block.items() if k != "hash"}
-        block_string = json.dumps(block_copy, sort_keys=True)
-        return hashlib.sha256(block_string.encode('utf-8')).hexdigest()
+        block_string = json.dumps(block_copy, sort_keys=True, default=str)
+        return hashlib.sha256(block_string.encode('utf-8', errors='ignore')).hexdigest()
 
     def create_genesis_block(self):
         base = {
@@ -108,21 +110,22 @@ class Blockchain:
             "previous_hash": "0",
             "nonce": 0,
         }
-        base["hash"] = self.proof_of_work(base)
+        base["hash"] = asyncio.get_event_loop().run_until_complete(self.proof_of_work(base))
         self.chain.append(base)
         self._persist_block(base)
         logger.info("Genesis block created")
 
-    def proof_of_work(self, block: dict) -> str:
+    async def proof_of_work(self, block: dict) -> str:
         start_time = time.time()
         block["nonce"] = 0
-        computed_hash = self.compute_hash(block)
-        while not computed_hash.startswith("00"):  # Reduced difficulty for performance
+        computed_hash = await self.compute_hash(block)
+        while not computed_hash.startswith("00"):  # Reduced difficulty
             block["nonce"] += 1
-            computed_hash = self.compute_hash(block)
+            computed_hash = await self.compute_hash(block)
             if time.time() - start_time > 5:
                 logger.warning("Proof-of-work timeout, using partial hash")
                 break
+            await asyncio.sleep(0)  # Yield control
         return computed_hash
 
     def add_transaction(self, user_id, message, msg_type="text", filename="", ts=None):
@@ -136,7 +139,7 @@ class Blockchain:
             "timestamp": ts if ts is not None else time.time(),
         })
 
-    def mine_block(self):
+    async def mine_block(self):
         if not self.pending_transactions:
             return None
         with mine_lock:
@@ -149,7 +152,7 @@ class Blockchain:
                 "previous_hash": self.chain[-1]["hash"] if self.chain else "0",
                 "nonce": 0,
             }
-            block["hash"] = self.proof_of_work(block)
+            block["hash"] = await self.proof_of_work(block)
             self.chain.append(block)
             self.pending_transactions = []
             self._persist_block(block)
@@ -157,7 +160,7 @@ class Blockchain:
             return block
 
     def async_mine_block(self):
-        Thread(target=self.mine_block).start()
+        asyncio.run_coroutine_threadsafe(self.mine_block(), asyncio.get_event_loop())
 
     def _persist_block(self, block: dict):
         try:
@@ -172,31 +175,31 @@ class Blockchain:
             logger.error(f"Failed to load chain from DB: {e}")
             self.chain = []
 
-    def is_valid_chain(self, chain: list) -> bool:
+    async def is_valid_chain(self, chain: list) -> bool:
         if not chain:
             return False
         g = chain[0]
         if g.get("previous_hash") != "0":
             return False
-        if not self.compute_hash(g).startswith("00"):
+        if not (await self.compute_hash(g)).startswith("00"):
             return False
-        if g.get("hash") != self.compute_hash(g):
+        if g.get("hash") != await self.compute_hash(g):
             return False
         for i in range(1, len(chain)):
             current = chain[i]
             prev = chain[i - 1]
             if current.get("previous_hash") != prev.get("hash"):
                 return False
-            if not self.compute_hash(current).startswith("00"):
+            if not (await self.compute_hash(current)).startswith("00"):
                 return False
-            if current.get("hash") != self.compute_hash(current):
+            if current.get("hash") != await self.compute_hash(current):
                 return False
         return True
 
-    def replace_chain(self, new_chain: list) -> bool:
+    async def replace_chain(self, new_chain: list) -> bool:
         if len(new_chain) <= len(self.chain):
             return False
-        if not self.is_valid_chain(new_chain):
+        if not await self.is_valid_chain(new_chain):
             return False
         self.chain = new_chain
         try:
@@ -210,7 +213,7 @@ class Blockchain:
             return False
 
 # Globals & Peer Clients
-port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5000))
+port = int(os.environ.get("PORT", 5000))
 blockchain = Blockchain()
 peers = []
 peer_clients = []
@@ -218,7 +221,7 @@ processed_messages = set()
 
 def connect_to_peers(peer_ports, host="localhost"):
     for p in peer_ports:
-        peer_url = f"http://{host}:{p}" if os.environ.get("RENDER") != "true" else f"https://chatify-fcw1.onrender.com/"
+        peer_url = f"http://{host}:{p}" if os.environ.get("RENDER") != "true" else "https://chatify-fcw1.onrender.com/"
         if peer_url in peers:
             continue
         peers.append(peer_url)
@@ -227,7 +230,7 @@ def connect_to_peers(peer_ports, host="localhost"):
             client.connect(peer_url, transports=['websocket'])
             peer_clients.append(client)
             logger.debug(f"Connected to peer: {peer_url}")
-            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain, safe=True))
+            client.emit("sync_blockchain", json.dumps(blockchain.chain, default=str))
         except Exception as e:
             logger.error(f"Failed to connect to peer {peer_url}: {e}")
 
@@ -241,10 +244,12 @@ def index():
 @socketio.on("connect")
 def handle_connect():
     logger.debug("Client connected")
+    init_mongo()  # Initialize MongoDB after fork
     emit("status", {"message": "Connected"})
     try:
-        recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))  # Reduced limit
+        recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
         for m in reversed(recent):
+            m['timestamp'] = float(m['timestamp'])
             emit("message", m)
     except Exception as e:
         logger.error(f"Failed to send recent messages: {e}")
@@ -306,26 +311,20 @@ def handle_message(data):
     blockchain.add_transaction(user_id, msg, msg_type, filename, ts)
     blockchain.async_mine_block()
 
-    emit("message", {
+    msg_data = {
         "user_id": user_id,
         "message": msg,
         "msg_id": msg_id,
         "type": msg_type,
         "filename": filename,
         "timestamp": ts
-    }, broadcast=True)
+    }
+    emit("message", msg_data, broadcast=True)
 
     for client in peer_clients:
         try:
-            client.emit("message", {
-                "user_id": user_id,
-                "message": msg,
-                "msg_id": msg_id,
-                "type": msg_type,
-                "filename": filename,
-                "timestamp": ts
-            })
-            client.emit("sync_blockchain", jsonpickle.encode(blockchain.chain, safe=True))
+            client.emit("message", msg_data)
+            client.emit("sync_blockchain", json.dumps(blockchain.chain, default=str))
             logger.debug("Forwarded message and blockchain to peer")
         except Exception as e:
             logger.error(f"Failed to forward to peer: {e}")
@@ -336,12 +335,13 @@ def handle_message(data):
 @socketio.on("sync_blockchain")
 def handle_sync_blockchain(data):
     try:
-        received_chain = jsonpickle.decode(data, safe=True)
+        received_chain = json.loads(data)
         for block in received_chain:
             for tx in block.get("transactions", []):
                 if isinstance(tx.get("message"), str):
                     tx["message"] = tx["message"].encode('utf-8', errors='ignore').decode('utf-8')
-        if blockchain.replace_chain(received_chain):
+        loop = asyncio.get_event_loop()
+        if loop.run_until_complete(blockchain.replace_chain(received_chain)):
             logger.info("Blockchain updated from peer")
             for block in blockchain.chain:
                 for tx in block.get("transactions", []):
@@ -353,7 +353,7 @@ def handle_sync_blockchain(data):
                         "msg_id": mid,
                         "type": tx.get("type", "text"),
                         "filename": tx.get("filename", ""),
-                        "timestamp": tx.get("timestamp", time.time())
+                        "timestamp": float(tx.get("timestamp", time.time()))
                     })
     except Exception as e:
         logger.error(f"Failed to decode received chain: {e}")
@@ -366,14 +366,15 @@ def handle_request_blockchain():
             for tx in block.get("transactions", []):
                 if isinstance(tx.get("message"), str):
                     tx["message"] = tx["message"].encode('utf-8', errors='ignore').decode('utf-8')
-        emit("sync_blockchain", jsonpickle.encode(chain_copy, safe=True))
+        emit("sync_blockchain", json.dumps(chain_copy, default=str))
+        logger.info("Sent blockchain to client")
     except Exception as e:
         logger.error(f"Failed to send blockchain: {e}")
 
 # Main
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5000))
-    peer_ports = load_peers() or [int(p) for p in sys.argv[2:]] if len(sys.argv) > 2 else []
+    port = int(os.environ.get("PORT", 5000))
+    peer_ports = load_peers() or []
     local_ip = get_local_ip()
     logger.info(f"Starting server on http://0.0.0.0:{port} (accessible at http://{local_ip}:{port})")
     if peer_ports:
