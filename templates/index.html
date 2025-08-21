@@ -1,4 +1,3 @@
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PeerPulse</title>
 
-    <!-- Libs -->
+    <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.5/client-dist/socket.io.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.13/dayjs.min.js"></script>
@@ -18,7 +17,7 @@
     <!-- Tailwind CSS -->
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 
-    <!-- Softer theme -->
+    <!-- Custom Styles -->
     <style>
         :root {
             --bg-1: #f5f7fa;
@@ -26,11 +25,11 @@
             --card: #ffffff;
             --text: #1f2937;
             --muted: #6b7280;
-            --brand: #3b82f6;      /* blue-500 */
-            --brand-strong: #2563eb; /* blue-600 */
-            --sent: #dbeafe;       /* blue-100 */
-            --recv: #f3f4f6;       /* gray-100 */
-            --border: #e5e7eb;     /* gray-200 */
+            --brand: #3b82f6;
+            --brand-strong: #2563eb;
+            --sent: #dbeafe;
+            --recv: #f3f4f6;
+            --border: #e5e7eb;
         }
         * { box-sizing: border-box; }
         html, body { height: 100%; }
@@ -41,8 +40,6 @@
             margin: 0;
             padding: 20px;
         }
-
-        /* Containers */
         #chat-container, #login-container {
             background: var(--card);
             border-radius: 14px;
@@ -50,7 +47,6 @@
             box-shadow: 0 6px 20px rgba(0,0,0,0.06);
             border: 1px solid var(--border);
         }
-
         #chat-area {
             height: 70vh;
             overflow-y: auto;
@@ -59,8 +55,6 @@
             padding: 14px;
             border: 1px solid var(--border);
         }
-
-        /* Messages */
         .message {
             max-width: 75%;
             margin: 8px 12px;
@@ -79,7 +73,6 @@
             background: var(--recv);
             border-bottom-left-radius: 5px;
         }
-
         .message .timestamp {
             font-size: 0.72rem;
             color: var(--muted);
@@ -92,8 +85,6 @@
             margin-right: 6px;
             color: #111827;
         }
-
-        /* Inputs & Buttons */
         input[type="text"], input[type="file"] {
             border-radius: 24px;
             background: #f9fafb;
@@ -113,13 +104,10 @@
         #send-button:hover, #file-button:hover, #login-button:hover {
             background: var(--brand-strong);
         }
-
         #status {
             font-size: 0.85rem;
             color: var(--muted);
         }
-
-        /* Scrollbar */
         #chat-area::-webkit-scrollbar { width: 8px; }
         #chat-area::-webkit-scrollbar-thumb {
             background: #d1d5db;
@@ -155,24 +143,25 @@
     </div>
 
     <script>
-        // ---- Day.js plugins ----
+        // Day.js plugins
         dayjs.extend(dayjs_plugin_relativeTime);
         dayjs.extend(dayjs_plugin_isToday);
         dayjs.extend(dayjs_plugin_isYesterday);
 
-        // ---- Socket setup ----
+        // Socket setup
         const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        const socketUrl = isLocal ? 'http://localhost:5000' : 'https://chatify-fcw1.onrender.com';
+        const socketUrl = isLocal ? 'http://localhost:8000' : 'https://chatify-fcw1.onrender.com';
         const socket = io(socketUrl, {
             transports: ['websocket'],
             reconnection: true,
             reconnectionAttempts: Infinity,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
-            timeout: 20000
+            timeout: 20000,
+            randomizationFactor: 0.5
         });
 
-        // ---- DOM refs ----
+        // DOM references
         const loginContainer = document.getElementById("login-container");
         const chatContainer = document.getElementById("chat-container");
         const userIdInput = document.getElementById("user-id-input");
@@ -186,11 +175,10 @@
         const chatArea = document.getElementById("chat-area");
 
         const encryptionKey = "peerpulse-secret-2025";
-
         serverInfo.textContent = socketUrl;
         userIdInput.value = localStorage.getItem("userId") || "";
 
-        // ---- Helpers ----
+        // Helpers
         function toSeconds(rawTs) {
             const n = Number(rawTs);
             if (!isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
@@ -227,20 +215,59 @@
             chatArea.scrollTop = chatArea.scrollHeight;
         }
 
-        // ---- Login ----
+        // Message caching
+        function cacheMessages(messages) {
+            localStorage.setItem('chatMessages', JSON.stringify(messages.slice(-100))); // Limit to 100 messages
+        }
+
+        function loadCachedMessages() {
+            const cached = localStorage.getItem('chatMessages');
+            if (cached) {
+                const messages = JSON.parse(cached);
+                messages.forEach(msg => {
+                    let contentHtml;
+                    try {
+                        const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
+                        contentHtml = msg.type === 'file' ?
+                            `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename)}</a>` :
+                            escapeHtml(decrypted || '[Decryption Error]');
+                    } catch (e) {
+                        contentHtml = '[Decryption Error]';
+                    }
+                    appendMessage({
+                        user_id: msg.user_id,
+                        contentHtml,
+                        isSent: msg.user_id === localStorage.getItem('userId'),
+                        timestamp: msg.timestamp
+                    });
+                });
+            }
+        }
+
+        // Infinite scroll
+        let messageOffset = 0;
+        chatArea.addEventListener('scroll', () => {
+            if (chatArea.scrollTop === 0) {
+                socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
+                messageOffset += 20;
+            }
+        });
+
+        // Login
         loginButton.onclick = () => {
             const userId = userIdInput.value.trim();
-            if (userId) {
+            if (userId && userId.length <= 50) {
                 localStorage.setItem("userId", userId);
                 socket.emit('join', userId);
                 loginContainer.classList.add("hidden");
                 chatContainer.classList.remove("hidden");
+                loadCachedMessages();
             } else {
-                alert("Please enter a valid User ID.");
+                alert("Please enter a valid User ID (max 50 characters).");
             }
         };
 
-        // ---- Socket events ----
+        // Socket events
         socket.on("connect", () => {
             statusDiv.textContent = `Connected | Server: ${socketUrl}`;
             statusDiv.classList.remove("text-red-400");
@@ -251,7 +278,8 @@
                 isSent: false,
                 timestamp: Math.floor(Date.now() / 1000)
             });
-            socket.emit("request_blockchain");
+            socket.emit("request_blockchain", { offset: 0, limit: 20 });
+            messageOffset = 20;
         });
 
         socket.on("connect_error", (error) => {
@@ -263,13 +291,8 @@
 
         socket.on("status", (data) => {
             statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
-            if (data.message === "Connected") {
-                statusDiv.classList.add("text-green-600");
-                statusDiv.classList.remove("text-red-400");
-            } else {
-                statusDiv.classList.add("text-red-400");
-                statusDiv.classList.remove("text-green-600");
-            }
+            statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
+            statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
         });
 
         socket.on("message", (data) => {
@@ -304,6 +327,21 @@
                 isSent,
                 timestamp: data.timestamp
             });
+
+            // Update cache
+            let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
+            messages.push(data);
+            cacheMessages(messages);
+        });
+
+        socket.on("typing", (data) => {
+            statusDiv.textContent = `${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl}`;
+        });
+
+        socket.on("stop_typing", () => {
+            statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+            statusDiv.classList.add("text-green-600");
+            statusDiv.classList.remove("text-red-400");
         });
 
         socket.on("disconnect", () => {
@@ -312,7 +350,8 @@
             statusDiv.classList.add("text-red-400");
         });
 
-        // ---- Send text ----
+        // Send text
+        let typingTimeout;
         sendButton.onclick = () => {
             const userId = localStorage.getItem("userId") || "Unknown";
             const message = messageInput.value.trim();
@@ -327,17 +366,27 @@
                 };
                 socket.emit("message", msgData);
                 messageInput.value = "";
+                clearTimeout(typingTimeout);
+                socket.emit("stop_typing", { user_id: userId });
             } else {
                 alert("Please enter a valid message (max 200 characters).");
             }
         };
+
+        // Typing indicator
+        messageInput.addEventListener("input", () => {
+            const userId = localStorage.getItem("userId") || "Unknown";
+            socket.emit("typing", { user_id: userId });
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => socket.emit("stop_typing", { user_id: userId }), 1000);
+        });
 
         // Enter to send
         messageInput.addEventListener("keypress", (e) => {
             if (e.key === "Enter") sendButton.click();
         });
 
-        // ---- Send file ----
+        // Send file
         fileButton.onclick = () => {
             const userId = localStorage.getItem("userId") || "Unknown";
             const file = fileInput.files[0];
@@ -365,4 +414,3 @@
     </script>
 </body>
 </html>
-```
