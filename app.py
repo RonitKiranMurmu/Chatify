@@ -27,8 +27,8 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-# Use SHA256-derived key in hexadecimal format (string) to match CryptoJS
-ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).hexdigest()
+# Use raw 32-byte SHA256 digest to match CryptoJS
+ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
 
 # Initialize MongoDB client at startup
 mongo_client = MongoClient(
@@ -78,22 +78,27 @@ mine_lock = Lock()
 def encrypt_message(message):
     try:
         # Generate random IV
-        cipher = AES.new(ENCRYPTION_KEY[:32].encode('utf-8'), AES.MODE_CBC)
+        cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC)
         ct_bytes = cipher.encrypt(pad(message.encode('utf-8'), AES.block_size))
-        # CryptoJS expects base64-encoded (IV + ciphertext)
-        result = base64.b64encode(cipher.iv + ct_bytes).decode('utf-8')
-        return result
+        # Mimic CryptoJS OpenSSL format: Salted__ + salt (8 bytes) + IV (16 bytes) + ciphertext
+        salt = os.urandom(8)  # Random 8-byte salt
+        salted = b'Salted__' + salt + cipher.iv + ct_bytes
+        return base64.b64encode(salted).decode('utf-8')
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         return None
 
 def decrypt_message(encrypted):
     try:
-        # Decode base64 and extract IV (first 16 bytes) and ciphertext
+        # Decode base64 and parse OpenSSL format
         raw = base64.b64decode(encrypted)
-        iv = raw[:16]
-        ct = raw[16:]
-        cipher = AES.new(ENCRYPTION_KEY[:32].encode('utf-8'), AES.MODE_CBC, iv=iv)
+        if not raw.startswith(b'Salted__'):
+            raise ValueError("Invalid OpenSSL format: missing Salted__ header")
+        # Extract salt (8 bytes), IV (16 bytes), and ciphertext
+        salt = raw[8:16]
+        iv = raw[16:32]
+        ct = raw[32:]
+        cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC, iv=iv)
         pt = unpad(cipher.decrypt(ct), AES.block_size).decode('utf-8')
         return pt
     except Exception as e:
@@ -125,7 +130,7 @@ def load_peers():
 
 # Blockchain
 class Blockchain:
-    def __init__(self):
+    def _init_(self):
         self.chain = []
         self.pending_transactions = []
         self.load_chain_from_db()
@@ -482,7 +487,7 @@ def handle_request_blockchain(data=None):
         emit("status", {"message": f"Error fetching blockchain: {str(e)}"})
 
 # Main
-if __name__ == "__main__":
+if __name__ == "_main_":
     port = int(os.environ.get("PORT", 8000))
     peer_ports = load_peers() or []
     local_ip = get_local_ip()

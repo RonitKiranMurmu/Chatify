@@ -175,12 +175,14 @@
         const chatArea = document.getElementById("chat-area");
 
         const baseKey = "peerpulse-secret-2025";
-        const encryptionKey = CryptoJS.SHA256(baseKey).toString(CryptoJS.enc.Hex);
+        const encryptionKey = CryptoJS.SHA256("peerpulse-secret-2025").toString(CryptoJS.enc.Hex);
+        console.log("Client encryption key:", encryptionKey); // Log key for debugging
+
         serverInfo.textContent = socketUrl;
         userIdInput.value = localStorage.getItem("userId") || "";
 
         // Clear corrupted cache (run once, then remove or comment out)
-         localStorage.removeItem('chatMessages');
+        //localStorage.removeItem('chatMessages');
 
         // Helpers
         function toSeconds(rawTs) {
