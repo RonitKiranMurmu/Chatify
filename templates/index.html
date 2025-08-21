@@ -157,7 +157,7 @@
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        timeout: 20000,
+        timeout: 10000,
         randomizationFactor: 0.5
     });
 
@@ -174,14 +174,11 @@
     const serverInfo = document.getElementById("server-info");
     const chatArea = document.getElementById("chat-area");
 
-    const encryptionKey = CryptoJS.SHA256("peerpulse-secret-2025").toString(CryptoJS.enc.Hex);
-    console.log("Client encryption key:", encryptionKey);
+    const encryptionKey = CryptoJS.enc.Hex.parse('6d9aff9e495776401fab839ae17d1df50c33a774b4eacd9133c3881e918b1d04');
+    console.log("Client encryption key:", encryptionKey.toString(CryptoJS.enc.Hex));
 
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
-
-    // Clear corrupted cache (run once, then comment out after successful test)
-    // localStorage.removeItem('chatMessages');
 
     // Helpers
     function toSeconds(rawTs) {
@@ -208,6 +205,36 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+
+    function decryptMessage(ciphertext) {
+        try {
+            const bytes = CryptoJS.enc.Base64.parse(ciphertext);
+            const bytesStr = bytes.toString(CryptoJS.enc.Utf8);
+            if (!bytesStr.startsWith('Salted__')) {
+                throw new Error('Invalid OpenSSL format: missing Salted__ header');
+            }
+            const salt = bytes.words.slice(2, 4);
+            const iv = bytes.words.slice(4, 8);
+            const ct = bytes.words.slice(8);
+            const cipherParams = CryptoJS.lib.CipherParams.create({
+                ciphertext: CryptoJS.lib.WordArray.create(ct),
+                iv: CryptoJS.lib.WordArray.create(iv),
+                salt: CryptoJS.lib.WordArray.create(salt)
+            });
+            const decrypted = CryptoJS.AES.decrypt(cipherParams, encryptionKey, {
+                mode: CryptoJS.mode.CBC,
+                padding: CryptoJS.pad.Pkcs7
+            });
+            const plaintext = decrypted.toString(CryptoJS.enc.Utf8);
+            if (!plaintext) {
+                throw new Error('Decryption resulted in empty string');
+            }
+            return plaintext;
+        } catch (e) {
+            console.error('Decryption error:', e);
+            return null;
+        }
     }
 
     function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
@@ -249,7 +276,7 @@
             const isSystem = msg.user_id === "System";
             try {
                 console.log(`Attempting decryption for cached msg_id: ${msg.msg_id}, Ciphertext: ${msg.message.substring(0, 20)}...`);
-                const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
+                const decrypted = decryptMessage(msg.message);
                 if (!decrypted) {
                     console.warn(`Empty decrypted message for msg_id: ${msg.msg_id}`);
                     contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
@@ -285,7 +312,7 @@
         }
     });
 
-    // Login with enhanced debugging
+    // Login
     loginButton.onclick = () => {
         console.log("Login button clicked");
         const userId = userIdInput.value.trim();
@@ -308,25 +335,19 @@
             console.log("Emitting join event with userId:", userId);
             socket.emit('join', userId);
 
-            // Wait for server acknowledgment or timeout
             const joinTimeout = setTimeout(() => {
                 console.error("Join request timed out");
                 alert("Failed to join chat: Server did not respond. Please try again.");
                 statusDiv.textContent = `Join Failed: Server Timeout | Server: ${socketUrl}`;
                 statusDiv.classList.add("text-red-400");
-                loginContainer.classList.remove("hidden");
-                chatContainer.classList.add("hidden");
-            }, 5000);
+            }, 10000);
 
-            // Listen for join confirmation (system message)
-            socket.once("message", (data) => {
-                if (data.user_id === "System" && data.message.includes(`${userId} joined the chat`)) {
-                    clearTimeout(joinTimeout);
-                    console.log("Join confirmed by server");
-                    loginContainer.classList.add("hidden");
-                    chatContainer.classList.remove("hidden");
-                    loadCachedMessages();
-                }
+            socket.once('join_ack', (data) => {
+                clearTimeout(joinTimeout);
+                console.log("Join acknowledged:", data);
+                loginContainer.classList.add("hidden");
+                chatContainer.classList.remove("hidden");
+                loadCachedMessages();
             });
         } catch (e) {
             console.error("Error during login process:", e);
@@ -377,7 +398,7 @@
         let contentHtml;
         try {
             console.log(`Attempting decryption for msg_id: ${data.msg_id}, Ciphertext: ${messageContent.substring(0, 20)}...`);
-            const decrypted = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+            const decrypted = decryptMessage(messageContent);
             if (!decrypted) {
                 console.warn(`Empty decrypted ${isSystem ? 'system ' : ''}message for msg_id: ${data.msg_id}`);
                 contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
@@ -429,7 +450,10 @@
         const userId = localStorage.getItem("userId") || "Unknown";
         const message = messageInput.value.trim();
         if (message && userId && message.length <= 1000) {
-            const encrypted = CryptoJS.AES.encrypt(message, encryptionKey).toString();
+            const encrypted = CryptoJS.AES.encrypt(message, encryptionKey, {
+                mode: CryptoJS.mode.CBC,
+                padding: CryptoJS.pad.Pkcs7
+            }).toString();
             const msgData = {
                 user_id: userId,
                 message: encrypted,
@@ -466,7 +490,10 @@
             const reader = new FileReader();
             reader.onload = () => {
                 const base64Data = reader.result.split(',')[1];
-                const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey).toString();
+                const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey, {
+                    mode: CryptoJS.mode.CBC,
+                    padding: CryptoJS.pad.Pkcs7
+                }).toString();
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
