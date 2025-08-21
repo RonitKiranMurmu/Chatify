@@ -7,7 +7,7 @@ import uuid
 import time
 import socket
 from threading import Lock
-from flask import Flask, render_template
+from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure
@@ -20,37 +20,39 @@ logger = logging.getLogger("peerpulse")
 
 # Load environment variables
 load_dotenv()
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
 
-# Initialize MongoDB client after fork
-mongo_client = None
-db = None
-messages_col = None
-blocks_col = None
-peers_col = None
+# Initialize MongoDB client at startup
+mongo_client = MongoClient(
+    MONGO_URI,
+    maxPoolSize=50,
+    retryWrites=True,
+    retryReads=True,
+    connectTimeoutMS=10000,
+    serverSelectionTimeoutMS=10000,
+    tls=True,
+    tlsAllowInvalidCertificates=False
+)
+db = mongo_client[MONGO_DB]
+messages_col = db["messages"]
+blocks_col = db["blocks"]
+peers_col = db["peers"]
 
 def init_mongo():
     global mongo_client, db, messages_col, blocks_col, peers_col
     try:
-        mongo_client = MongoClient(MONGO_URI, maxPoolSize=50, retryWrites=True, retryReads=True, connectTimeoutMS=10000, serverSelectionTimeoutMS=10000)
-        db = mongo_client[MONGO_DB]
-        messages_col = db["messages"]
-        blocks_col = db["blocks"]
-        peers_col = db["peers"]
-        try:
-            messages_col.create_index([("msg_id", ASCENDING)], unique=True)
-            messages_col.create_index([("timestamp", DESCENDING)])
-            blocks_col.create_index([("index", ASCENDING)], unique=True)
-            blocks_col.create_index([("previous_hash", ASCENDING)])
-        except Exception as e:
-            logger.error(f"Failed to create indexes: {e}")
+        # Ensure indexes
+        messages_col.create_index([("msg_id", ASCENDING)], unique=True)
+        messages_col.create_index([("timestamp", DESCENDING)])
+        blocks_col.create_index([("index", ASCENDING)], unique=True)
+        blocks_col.create_index([("previous_hash", ASCENDING)])
         logger.info("MongoDB connection established")
-    except ConnectionFailure as e:
-        logger.error(f"MongoDB connection failed: {e}")
-        raise
+    except Exception as e:
+        logger.error(f"Failed to create indexes: {e}")
+    return mongo_client  # Return existing client
 
 # Initialize SocketIO
 socketio = SocketIO(
@@ -248,11 +250,15 @@ def index():
     logger.debug("Serving index.html")
     return render_template("index.html")
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
 # Socket.IO Events
-@socketio.on("connect")
-def handle_connect():
-    logger.debug("Client connected")
-    init_mongo()
+@socketio.on('connect')
+def handle_connect(auth=None):
+    init_mongo()  # Use existing MongoDB client
+    app.logger.debug("Client connected")
     emit("status", {"message": "Connected"})
     try:
         recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
