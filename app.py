@@ -25,48 +25,40 @@ logger = logging.getLogger("peerpulse")
 load_dotenv()
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
-MONGO_URI = os.environ.get("MONGO_URI")
-if not MONGO_URI:
-    logger.error("MONGO_URI not set in environment variables")
-    raise ValueError("MONGO_URI is required")
-logger.info(f"Using MONGO_URI: {MONGO_URI}")
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "peerpulse-secret-2025")
-ENCRYPTION_KEY = hashlib.sha256(ENCRYPTION_KEY.encode('utf-8')).digest()
-logger.info(f"Server encryption key: {ENCRYPTION_KEY.hex()}")
+# Use raw 32-byte SHA256 digest to match CryptoJS
+ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
+logger.info(f"Server encryption key: {ENCRYPTION_KEY.hex()}")  # Log key for debugging
 
-# Initialize MongoDB client
-try:
-    mongo_client = MongoClient(
-        MONGO_URI,
-        maxPoolSize=50,
-        retryWrites=True,
-        retryReads=True,
-        connectTimeoutMS=10000,
-        serverSelectionTimeoutMS=10000,
-        tls=True,
-        tlsAllowInvalidCertificates=False
-    )
-    mongo_client.admin.command('ping')
-    logger.info("MongoDB connection established")
-except ConnectionFailure as e:
-    logger.error(f"MongoDB connection failed: {e}")
-    raise
-
+# Initialize MongoDB client at startup
+mongo_client = MongoClient(
+    MONGO_URI,
+    maxPoolSize=50,
+    retryWrites=True,
+    retryReads=True,
+    connectTimeoutMS=10000,
+    serverSelectionTimeoutMS=10000,
+    tls=True,
+    tlsAllowInvalidCertificates=False
+)
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
 peers_col = db["peers"]
 
 def init_mongo():
+    global mongo_client, db, messages_col, blocks_col, peers_col
     try:
+        # Ensure indexes
         messages_col.create_index([("msg_id", ASCENDING)], unique=True)
         messages_col.create_index([("timestamp", DESCENDING)])
         blocks_col.create_index([("index", ASCENDING)], unique=True)
         blocks_col.create_index([("previous_hash", ASCENDING)])
-        logger.info("MongoDB indexes created")
+        logger.info("MongoDB connection established")
     except Exception as e:
         logger.error(f"Failed to create indexes: {e}")
+    return mongo_client
 
 # Initialize SocketIO
 socketio = SocketIO(
@@ -88,9 +80,7 @@ def encrypt_message(message):
     try:
         cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC)
         ct_bytes = cipher.encrypt(pad(message.encode('utf-8'), AES.block_size))
-        salt = os.urandom(8)
-        salted = b'Salted__' + salt + cipher.iv + ct_bytes
-        return base64.b64encode(salted).decode('utf-8')
+        return base64.b64encode(cipher.iv + ct_bytes).decode('utf-8')
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         return None
@@ -98,11 +88,8 @@ def encrypt_message(message):
 def decrypt_message(encrypted):
     try:
         raw = base64.b64decode(encrypted)
-        if not raw.startswith(b'Salted__'):
-            raise ValueError("Invalid OpenSSL format: missing Salted__ header")
-        salt = raw[8:16]
-        iv = raw[16:32]
-        ct = raw[32:]
+        iv = raw[0:16]
+        ct = raw[16:]
         cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC, iv=iv)
         pt = unpad(cipher.decrypt(ct), AES.block_size).decode('utf-8')
         return pt
@@ -135,7 +122,7 @@ def load_peers():
 
 # Blockchain
 class Blockchain:
-    def __init__(self):
+    def _init_(self):
         try:
             self.chain = []
             self.pending_transactions = []
@@ -183,7 +170,7 @@ class Blockchain:
     def add_transaction(self, user_id, message, msg_type="text", filename="", ts=None):
         if isinstance(message, str):
             message = message.encode('utf-8', errors='ignore').decode('utf-8')
-        if len(message) > 1000000:
+        if len(message) > 1000000:  # 1MB limit
             logger.error(f"Message too large from {user_id}")
             return False
         self.pending_transactions.append({
@@ -276,7 +263,6 @@ try:
     logger.info("Blockchain instance created")
 except Exception as e:
     logger.error(f"Failed to create Blockchain instance: {e}")
-    raise
 peers = []
 peer_clients = []
 processed_messages = set()
@@ -317,7 +303,10 @@ def handle_connect(auth=None):
         recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
         for m in reversed(recent):
             m['timestamp'] = float(m['timestamp'])
-            if m['type'] in ['text', 'file']:
+            # Encrypt message for client
+            if m['type'] == 'text':
+                m['message'] = encrypt_message(m['message'])
+            elif m['type'] == 'file':
                 m['message'] = encrypt_message(m['message'])
             logger.debug(f"Sending recent message: {m}")
             emit("message", m)
@@ -339,7 +328,6 @@ def handle_disconnect():
 @socketio.on("join")
 def handle_join(username):
     logger.debug(f"User joined: {username}")
-    emit("join_ack", {"status": "success", "user_id": username})
     emit("message", {
         "user_id": "System",
         "message": encrypt_message(f"{username} joined the chat"),
@@ -373,6 +361,7 @@ def handle_message(data):
         return
     processed_messages.add(msg_id)
 
+    # Decrypt incoming message
     decrypted_msg = decrypt_message(msg)
     if decrypted_msg is None:
         logger.error(f"Decryption failed for message {msg_id} from {user_id}")
@@ -382,6 +371,7 @@ def handle_message(data):
     logger.debug(f"Received {msg_type} from {user_id}, ID: {msg_id}, Decrypted: {decrypted_msg}")
 
     try:
+        # Store decrypted message in MongoDB
         messages_col.insert_one({
             "user_id": user_id,
             "message": decrypted_msg,
@@ -403,6 +393,7 @@ def handle_message(data):
 
     blockchain.async_mine_block()
 
+    # Encrypt message for broadcast
     encrypted_msg = encrypt_message(decrypted_msg)
     if encrypted_msg is None:
         logger.error(f"Encryption failed for broadcast of {msg_id}")
@@ -502,7 +493,7 @@ def handle_request_blockchain(data=None):
         emit("status", {"message": f"Error fetching blockchain: {str(e)}"})
 
 # Main
-if __name__ == "__main__":
+if __name__ == "_main_":
     port = int(os.environ.get("PORT", 8000))
     peer_ports = load_peers() or []
     local_ip = get_local_ip()
