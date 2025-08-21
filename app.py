@@ -6,7 +6,7 @@ import logging
 import uuid
 import time
 import socket
-from threading import Lock, Thread
+from threading import Lock
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient, ASCENDING, DESCENDING
@@ -52,7 +52,7 @@ def init_mongo():
         logger.error(f"MongoDB connection failed: {e}")
         raise
 
-# Initialize SocketIO with gevent for WebSocket support
+# Initialize SocketIO
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
@@ -123,18 +123,21 @@ class Blockchain:
         start_time = time.time()
         block["nonce"] = 0
         computed_hash = await self.compute_hash(block)
-        while not computed_hash.startswith("00"):  # Reduced difficulty for performance
+        while not computed_hash.startswith("00"):
             block["nonce"] += 1
             computed_hash = await self.compute_hash(block)
             if time.time() - start_time > 5:
                 logger.warning("Proof-of-work timeout, using partial hash")
                 break
-            await asyncio.sleep(0)  # Yield control to event loop
+            await asyncio.sleep(0)
         return computed_hash
 
     def add_transaction(self, user_id, message, msg_type="text", filename="", ts=None):
         if isinstance(message, str):
             message = message.encode('utf-8', errors='ignore').decode('utf-8')
+        if len(message) > 1000000:  # 1MB limit
+            logger.error(f"Message too large from {user_id}")
+            return False
         self.pending_transactions.append({
             "user_id": user_id,
             "message": message,
@@ -142,6 +145,7 @@ class Blockchain:
             "filename": filename,
             "timestamp": ts if ts is not None else time.time(),
         })
+        return True
 
     async def mine_block(self):
         if not self.pending_transactions:
@@ -248,7 +252,7 @@ def index():
 @socketio.on("connect")
 def handle_connect():
     logger.debug("Client connected")
-    init_mongo()  # Initialize MongoDB after fork
+    init_mongo()
     emit("status", {"message": "Connected"})
     try:
         recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
@@ -257,6 +261,7 @@ def handle_connect():
             emit("message", m)
     except Exception as e:
         logger.error(f"Failed to send recent messages: {e}")
+        emit("status", {"message": f"Error fetching messages: {str(e)}"})
     emit("message", {
         "user_id": "System",
         "message": "Welcome to PeerPulse!",
@@ -279,6 +284,14 @@ def handle_join(username):
         "type": "text",
         "timestamp": time.time()
     }, broadcast=True)
+
+@socketio.on("typing")
+def handle_typing(data):
+    emit("typing", data, broadcast=True, include_self=False)
+
+@socketio.on("stop_typing")
+def handle_stop_typing(data):
+    emit("stop_typing", data, broadcast=True, include_self=False)
 
 @socketio.on("message")
 def handle_message(data):
@@ -310,9 +323,13 @@ def handle_message(data):
         })
     except Exception as e:
         logger.error(f"Message insert failed for {msg_id}: {e}")
+        emit("status", {"message": f"Error saving message: {str(e)}"})
         return
 
-    blockchain.add_transaction(user_id, msg, msg_type, filename, ts)
+    if not blockchain.add_transaction(user_id, msg, msg_type, filename, ts):
+        emit("status", {"message": "Message too large"})
+        return
+
     blockchain.async_mine_block()
 
     msg_data = {
@@ -361,19 +378,34 @@ def handle_sync_blockchain(data):
                     })
     except Exception as e:
         logger.error(f"Failed to decode received chain: {e}")
+        emit("status", {"message": f"Error syncing blockchain: {str(e)}"})
 
 @socketio.on("request_blockchain")
-def handle_request_blockchain():
+def handle_request_blockchain(data=None):
     try:
+        offset = data.get("offset", 0) if data else 0
+        limit = data.get("limit", 20) if data else 20
         chain_copy = blockchain.chain.copy()
+        transactions = []
         for block in chain_copy:
             for tx in block.get("transactions", []):
                 if isinstance(tx.get("message"), str):
                     tx["message"] = tx["message"].encode('utf-8', errors='ignore').decode('utf-8')
-        emit("sync_blockchain", json.dumps(chain_copy, default=str))
-        logger.info("Sent blockchain to client")
+                transactions.append(tx)
+        transactions.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        for tx in transactions[offset:offset + limit]:
+            emit("message", {
+                "user_id": tx.get("user_id", "Unknown"),
+                "message": tx.get("message", ""),
+                "msg_id": str(uuid.uuid4()),
+                "type": tx.get("type", "text"),
+                "filename": tx.get("filename", ""),
+                "timestamp": float(tx.get("timestamp", time.time()))
+            })
+        logger.info(f"Sent blockchain transactions (offset: {offset}, limit: {limit})")
     except Exception as e:
         logger.error(f"Failed to send blockchain: {e}")
+        emit("status", {"message": f"Error fetching blockchain: {str(e)}"})
 
 # Main
 if __name__ == "__main__":
