@@ -180,7 +180,7 @@
         userIdInput.value = localStorage.getItem("userId") || "";
 
         // Clear corrupted cache (run once, then remove or comment out)
-        // localStorage.removeItem('chatMessages');
+         localStorage.removeItem('chatMessages');
 
         // Helpers
         function toSeconds(rawTs) {
@@ -319,6 +319,7 @@
 
             if (!isSystem) {
                 try {
+                    console.log("Attempting decryption for msg_id:", data.msg_id, "Ciphertext:", messageContent);
                     messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
                     if (!messageContent) {
                         console.warn(`Empty decrypted message for msg_id: ${data.msg_id}`);
@@ -327,6 +328,19 @@
                 } catch (e) {
                     console.error(`Decryption failed for msg_id: ${data.msg_id}:`, e);
                     messageContent = "[Decryption Error]";
+                }
+            } else {
+                // Log system messages to check encryption
+                console.log("System message received, raw:", messageContent);
+                try {
+                    messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+                    if (!messageContent) {
+                        console.warn(`Empty decrypted system message for msg_id: ${data.msg_id}`);
+                        messageContent = "[Empty System Message]";
+                    }
+                } catch (e) {
+                    console.error(`Decryption failed for system message msg_id: ${data.msg_id}:`, e);
+                    messageContent = "[System Decryption Error]";
                 }
             }
 
