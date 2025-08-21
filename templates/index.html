@@ -174,7 +174,8 @@
         const serverInfo = document.getElementById("server-info");
         const chatArea = document.getElementById("chat-area");
 
-        const encryptionKey = "peerpulse-secret-2025";
+        const baseKey = "peerpulse-secret-2025";
+        const encryptionKey = CryptoJS.SHA256(baseKey).toString(CryptoJS.enc.Hex);
         serverInfo.textContent = socketUrl;
         userIdInput.value = localStorage.getItem("userId") || "";
 

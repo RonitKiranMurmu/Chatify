@@ -27,7 +27,7 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-ENCRYPTION_KEY = "peerpulse-secret-2025".encode('utf-8')[:32]  # AES-256 requires 32-byte key
+ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
 
 # Initialize MongoDB client at startup
 mongo_client = MongoClient(
