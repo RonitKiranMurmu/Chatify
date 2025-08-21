@@ -143,313 +143,347 @@
     </div>
 
     <script>
-        // Day.js plugins
-        dayjs.extend(dayjs_plugin_relativeTime);
-        dayjs.extend(dayjs_plugin_isToday);
-        dayjs.extend(dayjs_plugin_isYesterday);
+    // Day.js plugins
+    dayjs.extend(dayjs_plugin_relativeTime);
+    dayjs.extend(dayjs_plugin_isToday);
+    dayjs.extend(dayjs_plugin_isYesterday);
 
-        // Socket setup
-        const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-        const socketUrl = isLocal ? 'http://localhost:8000' : 'https://chatify-fcw1.onrender.com';
-        const socket = io(socketUrl, {
-            transports: ['websocket'],
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            timeout: 20000,
-            randomizationFactor: 0.5
-        });
+    // Socket setup
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const socketUrl = isLocal ? 'http://localhost:8000' : 'https://chatify-fcw1.onrender.com';
+    const socket = io(socketUrl, {
+        transports: ['websocket'],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000,
+        randomizationFactor: 0.5
+    });
 
-        // DOM references
-        const loginContainer = document.getElementById("login-container");
-        const chatContainer = document.getElementById("chat-container");
-        const userIdInput = document.getElementById("user-id-input");
-        const messageInput = document.getElementById("message-input");
-        const fileInput = document.getElementById("file-input");
-        const loginButton = document.getElementById("login-button");
-        const sendButton = document.getElementById("send-button");
-        const fileButton = document.getElementById("file-button");
-        const statusDiv = document.getElementById("status");
-        const serverInfo = document.getElementById("server-info");
-        const chatArea = document.getElementById("chat-area");
+    // DOM references
+    const loginContainer = document.getElementById("login-container");
+    const chatContainer = document.getElementById("chat-container");
+    const userIdInput = document.getElementById("user-id-input");
+    const messageInput = document.getElementById("message-input");
+    const fileInput = document.getElementById("file-input");
+    const loginButton = document.getElementById("login-button");
+    const sendButton = document.getElementById("send-button");
+    const fileButton = document.getElementById("file-button");
+    const statusDiv = document.getElementById("status");
+    const serverInfo = document.getElementById("server-info");
+    const chatArea = document.getElementById("chat-area");
 
-        const encryptionKey = CryptoJS.SHA256("peerpulse-secret-2025").toString(CryptoJS.enc.Hex);
-        console.log("Client encryption key:", encryptionKey);
+    const encryptionKey = CryptoJS.SHA256("peerpulse-secret-2025").toString(CryptoJS.enc.Hex);
+    console.log("Client encryption key:", encryptionKey);
 
-        serverInfo.textContent = socketUrl;
-        userIdInput.value = localStorage.getItem("userId") || "";
+    serverInfo.textContent = socketUrl;
+    userIdInput.value = localStorage.getItem("userId") || "";
 
-        // Clear corrupted cache (run once, then comment out after successful test)
-        // localStorage.removeItem('chatMessages');
+    // Clear corrupted cache (run once, then comment out after successful test)
+    // localStorage.removeItem('chatMessages');
 
-        // Helpers
-        function toSeconds(rawTs) {
-            const n = Number(rawTs);
-            if (!isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
-            return n >= 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+    // Helpers
+    function toSeconds(rawTs) {
+        const n = Number(rawTs);
+        if (!isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
+        return n >= 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+
+    function formatTimestamp(rawTs) {
+        const ts = toSeconds(rawTs);
+        const date = new Date(ts * 1000);
+        if (dayjs(date).isToday()) {
+            return `Today, ${dayjs(date).format('h:mm A')}`;
+        } else if (dayjs(date).isYesterday()) {
+            return `Yesterday, ${dayjs(date).format('h:mm A')}`;
         }
+        return dayjs(date).format('MMM D, YYYY, h:mm A');
+    }
 
-        function formatTimestamp(rawTs) {
-            const ts = toSeconds(rawTs);
-            const date = new Date(ts * 1000);
-            if (dayjs(date).isToday()) {
-                return Today, ${dayjs(date).format('h:mm A')};
-            } else if (dayjs(date).isYesterday()) {
-                return Yesterday, ${dayjs(date).format('h:mm A')};
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `message ${isSent ? 'sent' : 'received'}`;
+        wrapper.innerHTML =
+            `<span class="user-id">${escapeHtml(user_id)}:</span> ${contentHtml}
+             <div class="timestamp">${formatTimestamp(timestamp)}</div>`;
+        chatArea.appendChild(wrapper);
+        chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    // Message caching
+    function cacheMessages(messages) {
+        const validMessages = messages.filter(msg =>
+            msg && 
+            msg.msg_id && 
+            msg.user_id && 
+            msg.message && 
+            typeof msg.message === 'string' && 
+            msg.timestamp
+        );
+        localStorage.setItem('chatMessages', JSON.stringify(validMessages.slice(-100)));
+    }
+
+    function loadCachedMessages() {
+        const cached = localStorage.getItem('chatMessages');
+        if (!cached) return;
+
+        let messages = JSON.parse(cached);
+        let validMessages = [];
+        messages.forEach(msg => {
+            if (!msg.message || typeof msg.message !== 'string' || !msg.msg_id) {
+                console.warn(`Skipping invalid cached message: ${JSON.stringify(msg)}`);
+                return;
             }
-            return dayjs(date).format('MMM D, YYYY, h:mm A');
-        }
-
-        function escapeHtml(str) {
-            return String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
-
-        function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
-            const wrapper = document.createElement('div');
-            wrapper.className = message ${isSent ? 'sent' : 'received'};
-            wrapper.innerHTML =
-                `<span class="user-id">${escapeHtml(user_id)}:</span> ${contentHtml}
-                 <div class="timestamp">${formatTimestamp(timestamp)}</div>`;
-            chatArea.appendChild(wrapper);
-            chatArea.scrollTop = chatArea.scrollHeight;
-        }
-
-        // Message caching
-        function cacheMessages(messages) {
-            // Filter out invalid messages before caching
-            const validMessages = messages.filter(msg => 
-                msg && 
-                msg.msg_id && 
-                msg.user_id && 
-                msg.message && 
-                typeof msg.message === 'string' && 
-                msg.timestamp
-            );
-            localStorage.setItem('chatMessages', JSON.stringify(validMessages.slice(-100))); // Limit to 100 messages
-        }
-
-        function loadCachedMessages() {
-            const cached = localStorage.getItem('chatMessages');
-            if (!cached) return;
-
-            let messages = JSON.parse(cached);
-            let validMessages = [];
-            messages.forEach(msg => {
-                if (!msg.message || typeof msg.message !== 'string' || !msg.msg_id) {
-                    console.warn(Skipping invalid cached message: ${JSON.stringify(msg)});
-                    return;
-                }
-
-                let contentHtml;
-                const isSystem = msg.user_id === "System";
-                try {
-                    console.log(Attempting decryption for cached msg_id: ${msg.msg_id}, Ciphertext: ${msg.message.substring(0, 20)}...);
-                    const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
-                    if (!decrypted) {
-                        console.warn(Empty decrypted message for msg_id: ${msg.msg_id});
-                        contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
-                    } else {
-                        contentHtml = msg.type === 'file' ?
-                            <a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename || 'file')}</a> :
-                            escapeHtml(decrypted);
-                    }
-                    validMessages.push(msg);
-                } catch (e) {
-                    console.error(Decryption failed for cached message (msg_id: ${msg.msg_id}):, e);
-                    contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
-                }
-
-                appendMessage({
-                    user_id: msg.user_id || 'Unknown',
-                    contentHtml,
-                    isSent: msg.user_id === localStorage.getItem('userId'),
-                    timestamp: msg.timestamp
-                });
-            });
-
-            // Update cache with valid messages only
-            cacheMessages(validMessages);
-        }
-
-        // Infinite scroll
-        let messageOffset = 0;
-        chatArea.addEventListener('scroll', () => {
-            if (chatArea.scrollTop === 0) {
-                console.log(Requesting blockchain messages, offset: ${messageOffset});
-                socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
-                messageOffset += 20;
-            }
-        });
-
-        // Login
-        loginButton.onclick = () => {
-            const userId = userIdInput.value.trim();
-            if (userId && userId.length <= 50) {
-                localStorage.setItem("userId", userId);
-                socket.emit('join', userId);
-                loginContainer.classList.add("hidden");
-                chatContainer.classList.remove("hidden");
-                loadCachedMessages();
-            } else {
-                alert("Please enter a valid User ID (max 50 characters).");
-            }
-        };
-
-        // Socket events
-        socket.on("connect", () => {
-            console.log("Connected to WebSocket server");
-            statusDiv.textContent = Connected | Server: ${socketUrl};
-            statusDiv.classList.remove("text-red-400");
-            statusDiv.classList.add("text-green-600");
-            appendMessage({
-                user_id: "System",
-                contentHtml: "Connected to server",
-                isSent: false,
-                timestamp: Math.floor(Date.now() / 1000)
-            });
-            socket.emit("request_blockchain", { offset: 0, limit: 20 });
-            messageOffset = 20;
-        });
-
-        socket.on("connect_error", (error) => {
-            console.error('WebSocket connection failed:', error);
-            statusDiv.textContent = Connection Failed: ${error.message} | Server: ${socketUrl};
-            statusDiv.classList.remove("text-green-600");
-            statusDiv.classList.add("text-red-400");
-        });
-
-        socket.on("status", (data) => {
-            console.log("Status received:", JSON.stringify(data, null, 2));
-            statusDiv.textContent = ${data.message} | Server: ${socketUrl};
-            statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
-            statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
-        });
-
-        socket.on("message", (data) => {
-            console.log("Message received:", JSON.stringify(data, null, 2));
-            let messageContent = data.message || "";
-            const userId = localStorage.getItem("userId") || "Unknown";
-            const isSent = data.user_id === userId;
-            const isSystem = data.user_id === "System";
 
             let contentHtml;
+            const isSystem = msg.user_id === "System";
             try {
-                console.log(Attempting decryption for msg_id: ${data.msg_id}, Ciphertext: ${messageContent.substring(0, 20)}...);
-                const decrypted = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+                console.log(`Attempting decryption for cached msg_id: ${msg.msg_id}, Ciphertext: ${msg.message.substring(0, 20)}...`);
+                const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
                 if (!decrypted) {
-                    console.warn(Empty decrypted ${isSystem ? 'system ' : ''}message for msg_id: ${data.msg_id});
+                    console.warn(`Empty decrypted message for msg_id: ${msg.msg_id}`);
                     contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
                 } else {
-                    contentHtml = data.type === 'file' ?
-                        <a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a> :
+                    contentHtml = msg.type === 'file' ?
+                        `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename || 'file')}</a>` :
                         escapeHtml(decrypted);
                 }
+                validMessages.push(msg);
             } catch (e) {
-                console.error(Decryption failed for ${isSystem ? 'system ' : ''}message msg_id: ${data.msg_id}:, e);
+                console.error(`Decryption failed for cached message (msg_id: ${msg.msg_id}):`, e);
                 contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
             }
 
             appendMessage({
-                user_id: data.user_id || "Unknown",
+                user_id: msg.user_id || 'Unknown',
                 contentHtml,
-                isSent,
-                timestamp: data.timestamp
+                isSent: msg.user_id === localStorage.getItem('userId'),
+                timestamp: msg.timestamp
             });
-
-            // Update cache
-            let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
-            messages.push(data);
-            cacheMessages(messages);
         });
 
-        socket.on("typing", (data) => {
-            console.log("Typing indicator:", data);
-            statusDiv.textContent = ${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl};
-        });
+        cacheMessages(validMessages);
+    }
 
-        socket.on("stop_typing", () => {
-            console.log("Stop typing received");
-            statusDiv.textContent = Connected | Server: ${socketUrl};
-            statusDiv.classList.add("text-green-600");
-            statusDiv.classList.remove("text-red-400");
-        });
+    // Infinite scroll
+    let messageOffset = 0;
+    chatArea.addEventListener('scroll', () => {
+        if (chatArea.scrollTop === 0) {
+            console.log(`Requesting blockchain messages, offset: ${messageOffset}`);
+            socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
+            messageOffset += 20;
+        }
+    });
 
-        socket.on("disconnect", () => {
-            console.log("Disconnected from WebSocket server");
-            statusDiv.textContent = Disconnected | Server: ${socketUrl};
-            statusDiv.classList.remove("text-green-600");
+    // Login with enhanced debugging
+    loginButton.onclick = () => {
+        console.log("Login button clicked");
+        const userId = userIdInput.value.trim();
+        console.log(`User ID entered: "${userId}"`);
+
+        if (!userId) {
+            console.error("User ID is empty");
+            alert("Please enter a User ID.");
+            return;
+        }
+        if (userId.length > 50) {
+            console.error(`User ID too long: ${userId.length} characters`);
+            alert("User ID must be 50 characters or less.");
+            return;
+        }
+
+        try {
+            console.log("Storing userId in localStorage:", userId);
+            localStorage.setItem("userId", userId);
+            console.log("Emitting join event with userId:", userId);
+            socket.emit('join', userId);
+
+            // Wait for server acknowledgment or timeout
+            const joinTimeout = setTimeout(() => {
+                console.error("Join request timed out");
+                alert("Failed to join chat: Server did not respond. Please try again.");
+                statusDiv.textContent = `Join Failed: Server Timeout | Server: ${socketUrl}`;
+                statusDiv.classList.add("text-red-400");
+                loginContainer.classList.remove("hidden");
+                chatContainer.classList.add("hidden");
+            }, 5000);
+
+            // Listen for join confirmation (system message)
+            socket.once("message", (data) => {
+                if (data.user_id === "System" && data.message.includes(`${userId} joined the chat`)) {
+                    clearTimeout(joinTimeout);
+                    console.log("Join confirmed by server");
+                    loginContainer.classList.add("hidden");
+                    chatContainer.classList.remove("hidden");
+                    loadCachedMessages();
+                }
+            });
+        } catch (e) {
+            console.error("Error during login process:", e);
+            alert(`Failed to join chat: ${e.message}`);
+            statusDiv.textContent = `Join Failed: ${e.message} | Server: ${socketUrl}`;
             statusDiv.classList.add("text-red-400");
+        }
+    };
+
+    // Socket events
+    socket.on("connect", () => {
+        console.log("Connected to WebSocket server");
+        statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+        statusDiv.classList.remove("text-red-400");
+        statusDiv.classList.add("text-green-600");
+        appendMessage({
+            user_id: "System",
+            contentHtml: "Connected to server",
+            isSent: false,
+            timestamp: Math.floor(Date.now() / 1000)
+        });
+        socket.emit("request_blockchain", { offset: 0, limit: 20 });
+        messageOffset = 20;
+    });
+
+    socket.on("connect_error", (error) => {
+        console.error('WebSocket connection failed:', error);
+        statusDiv.textContent = `Connection Failed: ${error.message} | Server: ${socketUrl}`;
+        statusDiv.classList.remove("text-green-600");
+        statusDiv.classList.add("text-red-400");
+        alert("Failed to connect to server. Please check your network and try again.");
+    });
+
+    socket.on("status", (data) => {
+        console.log("Status received:", JSON.stringify(data, null, 2));
+        statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
+        statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
+        statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
+    });
+
+    socket.on("message", (data) => {
+        console.log("Message received:", JSON.stringify(data, null, 2));
+        let messageContent = data.message || "";
+        const userId = localStorage.getItem("userId") || "Unknown";
+        const isSent = data.user_id === userId;
+        const isSystem = data.user_id === "System";
+
+        let contentHtml;
+        try {
+            console.log(`Attempting decryption for msg_id: ${data.msg_id}, Ciphertext: ${messageContent.substring(0, 20)}...`);
+            const decrypted = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+            if (!decrypted) {
+                console.warn(`Empty decrypted ${isSystem ? 'system ' : ''}message for msg_id: ${data.msg_id}`);
+                contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
+            } else {
+                contentHtml = data.type === 'file' ?
+                    `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a>` :
+                    escapeHtml(decrypted);
+            }
+        } catch (e) {
+            console.error(`Decryption failed for ${isSystem ? 'system ' : ''}message msg_id: ${data.msg_id}:`, e);
+            contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
+        }
+
+        appendMessage({
+            user_id: data.user_id || "Unknown",
+            contentHtml,
+            isSent,
+            timestamp: data.timestamp
         });
 
-        // Send text
-        let typingTimeout;
-        sendButton.onclick = () => {
-            const userId = localStorage.getItem("userId") || "Unknown";
-            const message = messageInput.value.trim();
-            if (message && userId && message.length <= 1000) {
-                const encrypted = CryptoJS.AES.encrypt(message, encryptionKey).toString();
+        let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
+        messages.push(data);
+        cacheMessages(messages);
+    });
+
+    socket.on("typing", (data) => {
+        console.log("Typing indicator:", data);
+        statusDiv.textContent = `${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl}`;
+    });
+
+    socket.on("stop_typing", () => {
+        console.log("Stop typing received");
+        statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+        statusDiv.classList.add("text-green-600");
+        statusDiv.classList.remove("text-red-400");
+    });
+
+    socket.on("disconnect", () => {
+        console.log("Disconnected from WebSocket server");
+        statusDiv.textContent = `Disconnected | Server: ${socketUrl}`;
+        statusDiv.classList.remove("text-green-600");
+        statusDiv.classList.add("text-red-400");
+        alert("Disconnected from server. Please refresh to reconnect.");
+    });
+
+    // Send text
+    let typingTimeout;
+    sendButton.onclick = () => {
+        const userId = localStorage.getItem("userId") || "Unknown";
+        const message = messageInput.value.trim();
+        if (message && userId && message.length <= 1000) {
+            const encrypted = CryptoJS.AES.encrypt(message, encryptionKey).toString();
+            const msgData = {
+                user_id: userId,
+                message: encrypted,
+                msg_id: uuid.v4(),
+                type: "text",
+                timestamp: Math.floor(Date.now() / 1000)
+            };
+            console.log("Sending message:", JSON.stringify(msgData, null, 2));
+            socket.emit("message", msgData);
+            messageInput.value = "";
+            clearTimeout(typingTimeout);
+            socket.emit("stop_typing", { user_id: userId });
+        } else {
+            alert("Please enter a valid message (max 1000 characters).");
+        }
+    };
+
+    messageInput.addEventListener("input", () => {
+        const userId = localStorage.getItem("userId") || "Unknown";
+        socket.emit("typing", { user_id: userId });
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => socket.emit("stop_typing", { user_id: userId }), 1000);
+    });
+
+    messageInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendButton.click();
+    });
+
+    // Send file
+    fileButton.onclick = () => {
+        const userId = localStorage.getItem("userId") || "Unknown";
+        const file = fileInput.files[0];
+        if (file && userId && file.size <= 1 * 1024 * 1024) {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const base64Data = reader.result.split(',')[1];
+                const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey).toString();
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
                     msg_id: uuid.v4(),
-                    type: "text",
+                    type: "file",
+                    filename: file.name,
                     timestamp: Math.floor(Date.now() / 1000)
                 };
-                console.log("Sending message:", JSON.stringify(msgData, null, 2));
+                console.log("Sending file message:", JSON.stringify(msgData, null, 2));
                 socket.emit("message", msgData);
-                messageInput.value = "";
-                clearTimeout(typingTimeout);
-                socket.emit("stop_typing", { user_id: userId });
-            } else {
-                alert("Please enter a valid message (max 1000 characters).");
-            }
-        };
-
-        // Typing indicator
-        messageInput.addEventListener("input", () => {
-            const userId = localStorage.getItem("userId") || "Unknown";
-            socket.emit("typing", { user_id: userId });
-            clearTimeout(typingTimeout);
-            typingTimeout = setTimeout(() => socket.emit("stop_typing", { user_id: userId }), 1000);
-        });
-
-        // Enter to send
-        messageInput.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") sendButton.click();
-        });
-
-        // Send file
-        fileButton.onclick = () => {
-            const userId = localStorage.getItem("userId") || "Unknown";
-            const file = fileInput.files[0];
-            if (file && userId && file.size <= 1 * 1024 * 1024) {
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const base64Data = reader.result.split(',')[1];
-                    const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey).toString();
-                    const msgData = {
-                        user_id: userId,
-                        message: encrypted,
-                        msg_id: uuid.v4(),
-                        type: "file",
-                        filename: file.name,
-                        timestamp: Math.floor(Date.now() / 1000)
-                    };
-                    console.log("Sending file message:", JSON.stringify(msgData, null, 2));
-                    socket.emit("message", msgData);
-                    fileInput.value = "";
-                };
-                reader.readAsDataURL(file);
-            } else {
-                alert("Please select a valid file (max 1MB).");
-            }
-        };
-    </script>
+                fileInput.value = "";
+            };
+            reader.readAsDataURL(file);
+        } else {
+            alert("Please select a valid file (max 1MB).");
+        }
+    };
+</script>
 </body>
 </html>
