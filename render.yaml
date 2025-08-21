@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: peerpulse
+    env: python
+    pythonVersion: "3.11"
+    plan: free
+    region: oregon
+    buildCommand: |
+      apt-get update && apt-get install -y libev-dev gcc python3-dev
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: gunicorn --config gunicorn.conf.py app:app
