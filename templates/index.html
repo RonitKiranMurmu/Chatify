@@ -232,6 +232,7 @@
                             `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename)}</a>` :
                             escapeHtml(decrypted || '[Decryption Error]');
                     } catch (e) {
+                        console.error("Decryption failed for cached message:", e);
                         contentHtml = '[Decryption Error]';
                     }
                     appendMessage({
@@ -248,6 +249,7 @@
         let messageOffset = 0;
         chatArea.addEventListener('scroll', () => {
             if (chatArea.scrollTop === 0) {
+                console.log(`Requesting blockchain messages, offset: ${messageOffset}`);
                 socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
                 messageOffset += 20;
             }
@@ -269,6 +271,7 @@
 
         // Socket events
         socket.on("connect", () => {
+            console.log("Connected to WebSocket server");
             statusDiv.textContent = `Connected | Server: ${socketUrl}`;
             statusDiv.classList.remove("text-red-400");
             statusDiv.classList.add("text-green-600");
@@ -290,12 +293,14 @@
         });
 
         socket.on("status", (data) => {
+            console.log("Status received:", data);
             statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
             statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
             statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
         });
 
         socket.on("message", (data) => {
+            console.log("Message received:", data);
             let messageContent = data.message || "";
             const userId = localStorage.getItem("userId") || "Unknown";
             const isSent = data.user_id === userId;
@@ -335,16 +340,19 @@
         });
 
         socket.on("typing", (data) => {
+            console.log("Typing indicator:", data);
             statusDiv.textContent = `${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl}`;
         });
 
         socket.on("stop_typing", () => {
+            console.log("Stop typing received");
             statusDiv.textContent = `Connected | Server: ${socketUrl}`;
             statusDiv.classList.add("text-green-600");
             statusDiv.classList.remove("text-red-400");
         });
 
         socket.on("disconnect", () => {
+            console.log("Disconnected from WebSocket server");
             statusDiv.textContent = `Disconnected | Server: ${socketUrl}`;
             statusDiv.classList.remove("text-green-600");
             statusDiv.classList.add("text-red-400");
@@ -355,7 +363,7 @@
         sendButton.onclick = () => {
             const userId = localStorage.getItem("userId") || "Unknown";
             const message = messageInput.value.trim();
-            if (message && userId && message.length <= 200) {
+            if (message && userId && message.length <= 1000) {
                 const encrypted = CryptoJS.AES.encrypt(message, encryptionKey).toString();
                 const msgData = {
                     user_id: userId,
@@ -364,12 +372,13 @@
                     type: "text",
                     timestamp: Math.floor(Date.now() / 1000)
                 };
+                console.log("Sending message:", msgData);
                 socket.emit("message", msgData);
                 messageInput.value = "";
                 clearTimeout(typingTimeout);
                 socket.emit("stop_typing", { user_id: userId });
             } else {
-                alert("Please enter a valid message (max 200 characters).");
+                alert("Please enter a valid message (max 1000 characters).");
             }
         };
 
@@ -403,6 +412,7 @@
                         filename: file.name,
                         timestamp: Math.floor(Date.now() / 1000)
                     };
+                    console.log("Sending file message:", msgData);
                     socket.emit("message", msgData);
                     fileInput.value = "";
                 };
