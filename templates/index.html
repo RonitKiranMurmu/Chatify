@@ -179,6 +179,9 @@
         serverInfo.textContent = socketUrl;
         userIdInput.value = localStorage.getItem("userId") || "";
 
+        // Clear corrupted cache (run once, then remove or comment out)
+        // localStorage.removeItem('chatMessages');
+
         // Helpers
         function toSeconds(rawTs) {
             const n = Number(rawTs);
@@ -225,24 +228,31 @@
             const cached = localStorage.getItem('chatMessages');
             if (cached) {
                 const messages = JSON.parse(cached);
-                messages.forEach(msg => {
+                const validMessages = messages.filter(msg => msg.message && typeof msg.message === 'string');
+                validMessages.forEach(msg => {
                     let contentHtml;
                     try {
                         const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
-                        contentHtml = msg.type === 'file' ?
-                            `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename)}</a>` :
-                            escapeHtml(decrypted || '[Decryption Error]');
+                        if (!decrypted) {
+                            console.warn(`Empty decrypted message for msg_id: ${msg.msg_id}`);
+                            contentHtml = '[Empty Message]';
+                        } else {
+                            contentHtml = msg.type === 'file' ?
+                                `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename)}</a>` :
+                                escapeHtml(decrypted);
+                        }
                     } catch (e) {
-                        console.error("Decryption failed for cached message:", e);
+                        console.error(`Decryption failed for cached message (msg_id: ${msg.msg_id}):`, e);
                         contentHtml = '[Decryption Error]';
                     }
                     appendMessage({
-                        user_id: msg.user_id,
+                        user_id: msg.user_id || 'Unknown',
                         contentHtml,
                         isSent: msg.user_id === localStorage.getItem('userId'),
                         timestamp: msg.timestamp
                     });
                 });
+                cacheMessages(validMessages);
             }
         }
 
@@ -294,14 +304,14 @@
         });
 
         socket.on("status", (data) => {
-            console.log("Status received:", data);
+            console.log("Status received:", JSON.stringify(data, null, 2));
             statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
             statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
             statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
         });
 
         socket.on("message", (data) => {
-            console.log("Message received:", data);
+            console.log("Message received:", JSON.stringify(data, null, 2));
             let messageContent = data.message || "";
             const userId = localStorage.getItem("userId") || "Unknown";
             const isSent = data.user_id === userId;
@@ -311,10 +321,11 @@
                 try {
                     messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
                     if (!messageContent) {
+                        console.warn(`Empty decrypted message for msg_id: ${data.msg_id}`);
                         messageContent = "[Empty or Invalid Message]";
                     }
                 } catch (e) {
-                    console.error("Decryption failed:", e);
+                    console.error(`Decryption failed for msg_id: ${data.msg_id}:`, e);
                     messageContent = "[Decryption Error]";
                 }
             }
@@ -369,7 +380,7 @@
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
-                    msg_id: uuidv4(),
+                    msg_id: uuid.v4(),
                     type: "text",
                     timestamp: Math.floor(Date.now() / 1000)
                 };
@@ -408,7 +419,7 @@
                     const msgData = {
                         user_id: userId,
                         message: encrypted,
-                        msg_id: uuidv4(),
+                        msg_id: uuid.v4(),
                         type: "file",
                         filename: file.name,
                         timestamp: Math.floor(Date.now() / 1000)

@@ -27,7 +27,8 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
+# Use SHA256-derived key in hexadecimal format to match client
+ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).hexdigest().encode('utf-8')
 
 # Initialize MongoDB client at startup
 mongo_client = MongoClient(
@@ -76,21 +77,23 @@ mine_lock = Lock()
 # Encryption/Decryption helpers
 def encrypt_message(message):
     try:
-        cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC)
+        # Generate random IV
+        cipher = AES.new(ENCRYPTION_KEY[:32], AES.MODE_CBC)  # Use first 32 bytes of key
         ct_bytes = cipher.encrypt(pad(message.encode('utf-8'), AES.block_size))
-        iv = base64.b64encode(cipher.iv).decode('utf-8')
-        ct = base64.b64encode(ct_bytes).decode('utf-8')
-        return f"{iv}:{ct}"
+        # Combine IV and ciphertext in a CryptoJS-compatible way
+        result = base64.b64encode(cipher.iv + ct_bytes).decode('utf-8')
+        return result
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         return None
 
 def decrypt_message(encrypted):
     try:
-        iv, ct = encrypted.split(':')
-        iv = base64.b64decode(iv)
-        ct = base64.b64decode(ct)
-        cipher = AES.new(ENCRYPTION_KEY, AES.MODE_CBC, iv=iv)
+        # Decode base64 and extract IV (first 16 bytes) and ciphertext
+        raw = base64.b64decode(encrypted)
+        iv = raw[:16]
+        ct = raw[16:]
+        cipher = AES.new(ENCRYPTION_KEY[:32], AES.MODE_CBC, iv=iv)
         pt = unpad(cipher.decrypt(ct), AES.block_size).decode('utf-8')
         return pt
     except Exception as e:
