@@ -174,15 +174,14 @@
         const serverInfo = document.getElementById("server-info");
         const chatArea = document.getElementById("chat-area");
 
-        const baseKey = "peerpulse-secret-2025";
         const encryptionKey = CryptoJS.SHA256("peerpulse-secret-2025").toString(CryptoJS.enc.Hex);
-        console.log("Client encryption key:", encryptionKey); // Log key for debugging
+        console.log("Client encryption key:", encryptionKey);
 
         serverInfo.textContent = socketUrl;
         userIdInput.value = localStorage.getItem("userId") || "";
 
-        // Clear corrupted cache (run once, then remove or comment out)
-        //localStorage.removeItem('chatMessages');
+        // Clear corrupted cache (run once, then comment out after successful test)
+        // localStorage.removeItem('chatMessages');
 
         // Helpers
         function toSeconds(rawTs) {
@@ -195,9 +194,9 @@
             const ts = toSeconds(rawTs);
             const date = new Date(ts * 1000);
             if (dayjs(date).isToday()) {
-                return `Today, ${dayjs(date).format('h:mm A')}`;
+                return Today, ${dayjs(date).format('h:mm A')};
             } else if (dayjs(date).isYesterday()) {
-                return `Yesterday, ${dayjs(date).format('h:mm A')}`;
+                return Yesterday, ${dayjs(date).format('h:mm A')};
             }
             return dayjs(date).format('MMM D, YYYY, h:mm A');
         }
@@ -213,7 +212,7 @@
 
         function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
             const wrapper = document.createElement('div');
-            wrapper.className = `message ${isSent ? 'sent' : 'received'}`;
+            wrapper.className = message ${isSent ? 'sent' : 'received'};
             wrapper.innerHTML =
                 `<span class="user-id">${escapeHtml(user_id)}:</span> ${contentHtml}
                  <div class="timestamp">${formatTimestamp(timestamp)}</div>`;
@@ -223,46 +222,66 @@
 
         // Message caching
         function cacheMessages(messages) {
-            localStorage.setItem('chatMessages', JSON.stringify(messages.slice(-100))); // Limit to 100 messages
+            // Filter out invalid messages before caching
+            const validMessages = messages.filter(msg => 
+                msg && 
+                msg.msg_id && 
+                msg.user_id && 
+                msg.message && 
+                typeof msg.message === 'string' && 
+                msg.timestamp
+            );
+            localStorage.setItem('chatMessages', JSON.stringify(validMessages.slice(-100))); // Limit to 100 messages
         }
 
         function loadCachedMessages() {
             const cached = localStorage.getItem('chatMessages');
-            if (cached) {
-                const messages = JSON.parse(cached);
-                const validMessages = messages.filter(msg => msg.message && typeof msg.message === 'string');
-                validMessages.forEach(msg => {
-                    let contentHtml;
-                    try {
-                        const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
-                        if (!decrypted) {
-                            console.warn(`Empty decrypted message for msg_id: ${msg.msg_id}`);
-                            contentHtml = '[Empty Message]';
-                        } else {
-                            contentHtml = msg.type === 'file' ?
-                                `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename)}</a>` :
-                                escapeHtml(decrypted);
-                        }
-                    } catch (e) {
-                        console.error(`Decryption failed for cached message (msg_id: ${msg.msg_id}):`, e);
-                        contentHtml = '[Decryption Error]';
+            if (!cached) return;
+
+            let messages = JSON.parse(cached);
+            let validMessages = [];
+            messages.forEach(msg => {
+                if (!msg.message || typeof msg.message !== 'string' || !msg.msg_id) {
+                    console.warn(Skipping invalid cached message: ${JSON.stringify(msg)});
+                    return;
+                }
+
+                let contentHtml;
+                const isSystem = msg.user_id === "System";
+                try {
+                    console.log(Attempting decryption for cached msg_id: ${msg.msg_id}, Ciphertext: ${msg.message.substring(0, 20)}...);
+                    const decrypted = CryptoJS.AES.decrypt(msg.message, encryptionKey).toString(CryptoJS.enc.Utf8);
+                    if (!decrypted) {
+                        console.warn(Empty decrypted message for msg_id: ${msg.msg_id});
+                        contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
+                    } else {
+                        contentHtml = msg.type === 'file' ?
+                            <a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename || 'file')}</a> :
+                            escapeHtml(decrypted);
                     }
-                    appendMessage({
-                        user_id: msg.user_id || 'Unknown',
-                        contentHtml,
-                        isSent: msg.user_id === localStorage.getItem('userId'),
-                        timestamp: msg.timestamp
-                    });
+                    validMessages.push(msg);
+                } catch (e) {
+                    console.error(Decryption failed for cached message (msg_id: ${msg.msg_id}):, e);
+                    contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
+                }
+
+                appendMessage({
+                    user_id: msg.user_id || 'Unknown',
+                    contentHtml,
+                    isSent: msg.user_id === localStorage.getItem('userId'),
+                    timestamp: msg.timestamp
                 });
-                cacheMessages(validMessages);
-            }
+            });
+
+            // Update cache with valid messages only
+            cacheMessages(validMessages);
         }
 
         // Infinite scroll
         let messageOffset = 0;
         chatArea.addEventListener('scroll', () => {
             if (chatArea.scrollTop === 0) {
-                console.log(`Requesting blockchain messages, offset: ${messageOffset}`);
+                console.log(Requesting blockchain messages, offset: ${messageOffset});
                 socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
                 messageOffset += 20;
             }
@@ -285,7 +304,7 @@
         // Socket events
         socket.on("connect", () => {
             console.log("Connected to WebSocket server");
-            statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+            statusDiv.textContent = Connected | Server: ${socketUrl};
             statusDiv.classList.remove("text-red-400");
             statusDiv.classList.add("text-green-600");
             appendMessage({
@@ -300,14 +319,14 @@
 
         socket.on("connect_error", (error) => {
             console.error('WebSocket connection failed:', error);
-            statusDiv.textContent = `Connection Failed: ${error.message} | Server: ${socketUrl}`;
+            statusDiv.textContent = Connection Failed: ${error.message} | Server: ${socketUrl};
             statusDiv.classList.remove("text-green-600");
             statusDiv.classList.add("text-red-400");
         });
 
         socket.on("status", (data) => {
             console.log("Status received:", JSON.stringify(data, null, 2));
-            statusDiv.textContent = `${data.message} | Server: ${socketUrl}`;
+            statusDiv.textContent = ${data.message} | Server: ${socketUrl};
             statusDiv.classList.toggle("text-red-400", data.message.includes('Error'));
             statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
         });
@@ -319,39 +338,21 @@
             const isSent = data.user_id === userId;
             const isSystem = data.user_id === "System";
 
-            if (!isSystem) {
-                try {
-                    console.log("Attempting decryption for msg_id:", data.msg_id, "Ciphertext:", messageContent);
-                    messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
-                    if (!messageContent) {
-                        console.warn(`Empty decrypted message for msg_id: ${data.msg_id}`);
-                        messageContent = "[Empty or Invalid Message]";
-                    }
-                } catch (e) {
-                    console.error(`Decryption failed for msg_id: ${data.msg_id}:`, e);
-                    messageContent = "[Decryption Error]";
-                }
-            } else {
-                // Log system messages to check encryption
-                console.log("System message received, raw:", messageContent);
-                try {
-                    messageContent = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
-                    if (!messageContent) {
-                        console.warn(`Empty decrypted system message for msg_id: ${data.msg_id}`);
-                        messageContent = "[Empty System Message]";
-                    }
-                } catch (e) {
-                    console.error(`Decryption failed for system message msg_id: ${data.msg_id}:`, e);
-                    messageContent = "[System Decryption Error]";
-                }
-            }
-
             let contentHtml;
-            if (data.type === "file") {
-                const safeName = escapeHtml(data.filename || "file");
-                contentHtml = `<a href="data:application/octet-stream;base64,${escapeHtml(messageContent)}" download="${safeName}" class="underline" style="color: var(--brand-strong);">Download ${safeName}</a>`;
-            } else {
-                contentHtml = escapeHtml(messageContent);
+            try {
+                console.log(Attempting decryption for msg_id: ${data.msg_id}, Ciphertext: ${messageContent.substring(0, 20)}...);
+                const decrypted = CryptoJS.AES.decrypt(messageContent, encryptionKey).toString(CryptoJS.enc.Utf8);
+                if (!decrypted) {
+                    console.warn(Empty decrypted ${isSystem ? 'system ' : ''}message for msg_id: ${data.msg_id});
+                    contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
+                } else {
+                    contentHtml = data.type === 'file' ?
+                        <a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a> :
+                        escapeHtml(decrypted);
+                }
+            } catch (e) {
+                console.error(Decryption failed for ${isSystem ? 'system ' : ''}message msg_id: ${data.msg_id}:, e);
+                contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
             }
 
             appendMessage({
@@ -369,19 +370,19 @@
 
         socket.on("typing", (data) => {
             console.log("Typing indicator:", data);
-            statusDiv.textContent = `${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl}`;
+            statusDiv.textContent = ${escapeHtml(data.user_id)} is typing... | Server: ${socketUrl};
         });
 
         socket.on("stop_typing", () => {
             console.log("Stop typing received");
-            statusDiv.textContent = `Connected | Server: ${socketUrl}`;
+            statusDiv.textContent = Connected | Server: ${socketUrl};
             statusDiv.classList.add("text-green-600");
             statusDiv.classList.remove("text-red-400");
         });
 
         socket.on("disconnect", () => {
             console.log("Disconnected from WebSocket server");
-            statusDiv.textContent = `Disconnected | Server: ${socketUrl}`;
+            statusDiv.textContent = Disconnected | Server: ${socketUrl};
             statusDiv.classList.remove("text-green-600");
             statusDiv.classList.add("text-red-400");
         });
@@ -400,7 +401,7 @@
                     type: "text",
                     timestamp: Math.floor(Date.now() / 1000)
                 };
-                console.log("Sending message:", msgData);
+                console.log("Sending message:", JSON.stringify(msgData, null, 2));
                 socket.emit("message", msgData);
                 messageInput.value = "";
                 clearTimeout(typingTimeout);
@@ -440,7 +441,7 @@
                         filename: file.name,
                         timestamp: Math.floor(Date.now() / 1000)
                     };
-                    console.log("Sending file message:", msgData);
+                    console.log("Sending file message:", JSON.stringify(msgData, null, 2));
                     socket.emit("message", msgData);
                     fileInput.value = "";
                 };

@@ -29,6 +29,7 @@ MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
 # Use raw 32-byte SHA256 digest to match CryptoJS
 ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
+logger.info(f"Server encryption key: {ENCRYPTION_KEY.hex()}")  # Log key for debugging
 
 # Initialize MongoDB client at startup
 mongo_client = MongoClient(
@@ -131,11 +132,16 @@ def load_peers():
 # Blockchain
 class Blockchain:
     def _init_(self):
-        self.chain = []
-        self.pending_transactions = []
-        self.load_chain_from_db()
-        if not self.chain:
-            self.create_genesis_block()
+        try:
+            self.chain = []
+            self.pending_transactions = []
+            self.load_chain_from_db()
+            if not self.chain:
+                self.create_genesis_block()
+            logger.info("Blockchain initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Blockchain: {e}")
+            raise
 
     @staticmethod
     async def compute_hash(block: dict) -> str:
@@ -217,6 +223,7 @@ class Blockchain:
     def load_chain_from_db(self):
         try:
             self.chain = list(blocks_col.find({}, {"_id": 0}).sort("index", ASCENDING))
+            logger.info(f"Loaded {len(self.chain)} blocks from database")
         except Exception as e:
             logger.error(f"Failed to load chain from DB: {e}")
             self.chain = []
@@ -260,7 +267,11 @@ class Blockchain:
 
 # Globals & Peer Clients
 port = int(os.environ.get("PORT", 8000))
-blockchain = Blockchain()
+try:
+    blockchain = Blockchain()
+    logger.info("Blockchain instance created")
+except Exception as e:
+    logger.error(f"Failed to create Blockchain instance: {e}")
 peers = []
 peer_clients = []
 processed_messages = set()
@@ -458,6 +469,10 @@ def handle_sync_blockchain(data):
 @socketio.on("request_blockchain")
 def handle_request_blockchain(data=None):
     try:
+        if not hasattr(blockchain, 'chain'):
+            logger.error("Blockchain object missing chain attribute")
+            emit("status", {"message": "Error: Blockchain not properly initialized"})
+            return
         offset = data.get("offset", 0) if data else 0
         limit = data.get("limit", 20) if data else 20
         chain_copy = blockchain.chain.copy()
