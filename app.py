@@ -56,6 +56,9 @@ def init_mongo():
         blocks_col.create_index([("index", ASCENDING)], unique=True)
         blocks_col.create_index([("previous_hash", ASCENDING)])
         logger.info("MongoDB connection established")
+        messages_col.drop()
+        blocks_col.drop()
+        logger.info("Cleared messages and blocks collections for reset")
     except Exception as e:
         logger.error(f"Failed to create indexes: {e}")
     return mongo_client
@@ -122,7 +125,7 @@ def load_peers():
 
 # Blockchain
 class Blockchain:
-    def _init_(self):
+    def __init_(self):
         try:
             self.chain = []
             self.pending_transactions = []
@@ -493,7 +496,7 @@ def handle_request_blockchain(data=None):
         emit("status", {"message": f"Error fetching blockchain: {str(e)}"})
 
 # Main
-if __name__ == "_main_":
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     peer_ports = load_peers() or []
     local_ip = get_local_ip()

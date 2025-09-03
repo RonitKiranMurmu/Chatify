@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PeerPulse</title>
+    <title>Chatify</title>
 
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.5/client-dist/socket.io.min.js"></script>
@@ -118,7 +118,7 @@
 <body>
     <!-- Login -->
     <div id="login-container" class="max-w-md mx-auto mt-10">
-        <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Join PeerPulse</h2>
+        <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Join Chatify</h2>
         <input type="text" id="user-id-input" placeholder="Your ID (e.g., user1)" class="w-full mb-4">
         <button id="login-button" class="w-full">Join Chat</button>
     </div>
@@ -174,8 +174,9 @@
     const serverInfo = document.getElementById("server-info");
     const chatArea = document.getElementById("chat-area");
 
-    const encryptionKey = CryptoJS.enc.Hex.parse('6d9aff9e495776401fab839ae17d1df50c33a774b4eacd9133c3881e918b1d04');
-    console.log("Client encryption key:", encryptionKey.toString(CryptoJS.enc.Hex));
+    const keyHex = '6d9aff9e495776401fab839ae17d1df50c33a774b4eacd9133c3881e918b1d04';
+    const key = CryptoJS.enc.Hex.parse(keyHex);
+    console.log("Client encryption key:", key.toString(CryptoJS.enc.Hex));
 
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
@@ -207,33 +208,57 @@
             .replace(/'/g, "&#039;");
     }
 
-    function decryptMessage(ciphertext) {
-        try {
-            const bytes = CryptoJS.enc.Base64.parse(ciphertext);
-            const bytesStr = bytes.toString(CryptoJS.enc.Utf8);
-            if (!bytesStr.startsWith('Salted__')) {
-                throw new Error('Invalid OpenSSL format: missing Salted__ header');
-            }
-            const salt = bytes.words.slice(2, 4);
-            const iv = bytes.words.slice(4, 8);
-            const ct = bytes.words.slice(8);
-            const cipherParams = CryptoJS.lib.CipherParams.create({
-                ciphertext: CryptoJS.lib.WordArray.create(ct),
-                iv: CryptoJS.lib.WordArray.create(iv),
-                salt: CryptoJS.lib.WordArray.create(salt)
-            });
-            const decrypted = CryptoJS.AES.decrypt(cipherParams, encryptionKey, {
+    function encryptMessage(plaintext) {
+        const iv = CryptoJS.lib.WordArray.random(16);
+        const encrypted = CryptoJS.AES.encrypt(
+            plaintext,
+            key,
+            {
+                iv: iv,
                 mode: CryptoJS.mode.CBC,
                 padding: CryptoJS.pad.Pkcs7
-            });
+            }
+        );
+        const ivCt = iv.concat(encrypted.ciphertext);
+        return CryptoJS.enc.Base64.stringify(ivCt);
+    }
+
+    function decryptMessage(ciphertextBase64) {
+        try {
+            const decoded = CryptoJS.enc.Base64.parse(ciphertextBase64);
+            if (decoded.sigBytes < 16) {
+                throw new Error('Ciphertext too short');
+            }
+
+            // Extract IV (first 16 bytes / 4 words)
+            const iv = CryptoJS.lib.WordArray.create(decoded.words.slice(0, 4));
+
+            // Extract ciphertext (rest)
+            const ct = CryptoJS.lib.WordArray.create(
+                decoded.words.slice(4),
+                decoded.sigBytes - 16
+            );
+
+            // Decrypt
+            const decrypted = CryptoJS.AES.decrypt(
+                { ciphertext: ct },
+                key,
+                {
+                    iv: iv,
+                    mode: CryptoJS.mode.CBC,
+                    padding: CryptoJS.pad.Pkcs7
+                }
+            );
+
+            // Convert to UTF-8
             const plaintext = decrypted.toString(CryptoJS.enc.Utf8);
             if (!plaintext) {
                 throw new Error('Decryption resulted in empty string');
             }
             return plaintext;
-        } catch (e) {
-            console.error('Decryption error:', e);
-            return null;
+        } catch (error) {
+            console.error('Decryption error:', error.message);
+            return null;  // Or handle gracefully
         }
     }
 
@@ -334,21 +359,9 @@
             localStorage.setItem("userId", userId);
             console.log("Emitting join event with userId:", userId);
             socket.emit('join', userId);
-
-            const joinTimeout = setTimeout(() => {
-                console.error("Join request timed out");
-                alert("Failed to join chat: Server did not respond. Please try again.");
-                statusDiv.textContent = `Join Failed: Server Timeout | Server: ${socketUrl}`;
-                statusDiv.classList.add("text-red-400");
-            }, 10000);
-
-            socket.once('join_ack', (data) => {
-                clearTimeout(joinTimeout);
-                console.log("Join acknowledged:", data);
-                loginContainer.classList.add("hidden");
-                chatContainer.classList.remove("hidden");
-                loadCachedMessages();
-            });
+            loginContainer.classList.add("hidden");
+            chatContainer.classList.remove("hidden");
+            loadCachedMessages();
         } catch (e) {
             console.error("Error during login process:", e);
             alert(`Failed to join chat: ${e.message}`);
@@ -450,10 +463,7 @@
         const userId = localStorage.getItem("userId") || "Unknown";
         const message = messageInput.value.trim();
         if (message && userId && message.length <= 1000) {
-            const encrypted = CryptoJS.AES.encrypt(message, encryptionKey, {
-                mode: CryptoJS.mode.CBC,
-                padding: CryptoJS.pad.Pkcs7
-            }).toString();
+            const encrypted = encryptMessage(message);
             const msgData = {
                 user_id: userId,
                 message: encrypted,
@@ -490,10 +500,7 @@
             const reader = new FileReader();
             reader.onload = () => {
                 const base64Data = reader.result.split(',')[1];
-                const encrypted = CryptoJS.AES.encrypt(base64Data, encryptionKey, {
-                    mode: CryptoJS.mode.CBC,
-                    padding: CryptoJS.pad.Pkcs7
-                }).toString();
+                const encrypted = encryptMessage(base64Data);
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
