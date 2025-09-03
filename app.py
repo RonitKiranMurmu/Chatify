@@ -206,7 +206,7 @@ class Blockchain:
             return block
 
     def async_mine_block(self):
-        asyncio.run_coroutine_threadsafe(self.mine_block(), asyncio.get_event_loop())
+        asyncio.run(self.mine_block())  # Runs the async method synchronously
 
     def _persist_block(self, block: dict):
         try:
