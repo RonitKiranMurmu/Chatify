@@ -56,9 +56,6 @@ def init_mongo():
         blocks_col.create_index([("index", ASCENDING)], unique=True)
         blocks_col.create_index([("previous_hash", ASCENDING)])
         logger.info("MongoDB connection established")
-        messages_col.drop()
-        blocks_col.drop()
-        logger.info("Cleared messages and blocks collections for reset")
     except Exception as e:
         logger.error(f"Failed to create indexes: {e}")
     return mongo_client

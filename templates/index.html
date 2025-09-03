@@ -173,8 +173,7 @@
     const statusDiv = document.getElementById("status");
     const serverInfo = document.getElementById("server-info");
     const chatArea = document.getElementById("chat-area");
-    localStorage.removeItem('chatMessages');
-    
+
     const keyHex = '6d9aff9e495776401fab839ae17d1df50c33a774b4eacd9133c3881e918b1d04';
     const key = CryptoJS.enc.Hex.parse(keyHex);
     console.log("Client encryption key:", key.toString(CryptoJS.enc.Hex));
