@@ -125,7 +125,7 @@ def load_peers():
 
 # Blockchain
 class Blockchain:
-    def __init_(self):
+    def __init__(self):
         try:
             self.chain = []
             self.pending_transactions = []
@@ -318,7 +318,7 @@ def handle_connect(auth=None):
         emit("status", {"message": f"Error fetching messages: {str(e)}"})
     emit("message", {
         "user_id": "System",
-        "message": encrypt_message("Welcome to PeerPulse!"),
+        "message": encrypt_message("Welcome to Chatify!"),
         "msg_id": str(uuid.uuid4()),
         "type": "text",
         "timestamp": time.time()
