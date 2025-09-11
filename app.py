@@ -27,9 +27,11 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-# Use raw 32-byte SHA256 digest to match CryptoJS
-ENCRYPTION_KEY = hashlib.sha256("peerpulse-secret-2025".encode('utf-8')).digest()
-logger.info(f"Server encryption key: {ENCRYPTION_KEY.hex()}")  # Log key for debugging
+# Use consistent encryption key for secure P2P storage
+ENCRYPTION_SECRET = "peerpulse-secret-2025"
+ENCRYPTION_KEY = hashlib.sha256(ENCRYPTION_SECRET.encode('utf-8')).digest()
+ENCRYPTION_KEY_HEX = ENCRYPTION_KEY.hex()
+logger.info("Secure encryption system initialized for P2P decentralized chat")
 
 # Initialize MongoDB client at startup
 mongo_client = MongoClient(
@@ -39,7 +41,8 @@ mongo_client = MongoClient(
     retryReads=True,
     connectTimeoutMS=10000,
     serverSelectionTimeoutMS=10000,
-    tls=True,
+    # Auto-detect TLS for Atlas vs local MongoDB
+    tls=MONGO_URI.startswith("mongodb+srv://") or "atlas" in MONGO_URI.lower(),
     tlsAllowInvalidCertificates=False
 )
 db = mongo_client[MONGO_DB]
@@ -300,26 +303,26 @@ def handle_connect(auth=None):
     logger.debug("Client connected")
     emit("status", {"message": "Connected"})
     try:
+        # Send recent messages (stored encrypted in DB)
         recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
         for m in reversed(recent):
             m['timestamp'] = float(m['timestamp'])
-            # Encrypt message for client
-            if m['type'] == 'text':
-                m['message'] = encrypt_message(m['message'])
-            elif m['type'] == 'file':
-                m['message'] = encrypt_message(m['message'])
-            logger.debug(f"Sending recent message: {m}")
+            logger.debug(f"Sending recent encrypted message: {m['msg_id']}")
             emit("message", m)
     except Exception as e:
         logger.error(f"Failed to send recent messages: {e}")
         emit("status", {"message": f"Error fetching messages: {str(e)}"})
-    emit("message", {
-        "user_id": "System",
-        "message": encrypt_message("Welcome to Chatify!"),
-        "msg_id": str(uuid.uuid4()),
-        "type": "text",
-        "timestamp": time.time()
-    }, broadcast=True)
+    
+    # Send welcome message
+    welcome_encrypted = encrypt_message("Welcome to Chatify!")
+    if welcome_encrypted:
+        emit("message", {
+            "user_id": "System",
+            "message": welcome_encrypted,
+            "msg_id": str(uuid.uuid4()),
+            "type": "text",
+            "timestamp": time.time()
+        })
 
 @socketio.on("disconnect")
 def handle_disconnect():
@@ -328,13 +331,15 @@ def handle_disconnect():
 @socketio.on("join")
 def handle_join(username):
     logger.debug(f"User joined: {username}")
-    emit("message", {
-        "user_id": "System",
-        "message": encrypt_message(f"{username} joined the chat"),
-        "msg_id": str(uuid.uuid4()),
-        "type": "text",
-        "timestamp": time.time()
-    }, broadcast=True)
+    join_encrypted = encrypt_message(f"{username} joined the chat")
+    if join_encrypted:
+        emit("message", {
+            "user_id": "System",
+            "message": join_encrypted,
+            "msg_id": str(uuid.uuid4()),
+            "type": "text",
+            "timestamp": time.time()
+        }, broadcast=True)
 
 @socketio.on("typing")
 def handle_typing(data):
@@ -350,56 +355,59 @@ def handle_stop_typing(data):
 def handle_message(data):
     start_time = time.time()
     user_id = data.get("user_id", "Unknown")
-    msg = data.get("message", "")
+    encrypted_msg = data.get("message", "")
     msg_id = data.get("msg_id", str(uuid.uuid4()))
     msg_type = data.get("type", "text")
     filename = data.get("filename", "")
     ts = float(data.get("timestamp", time.time()))
 
+    # Prevent duplicate processing
     if msg_id in processed_messages:
         logger.debug(f"Duplicate message {msg_id} ignored")
         return
     processed_messages.add(msg_id)
 
-    # Decrypt incoming message
-    decrypted_msg = decrypt_message(msg)
+    # Validate encrypted message
+    if not encrypted_msg:
+        logger.error(f"Empty encrypted message from {user_id}")
+        emit("status", {"message": "Invalid message received"})
+        return
+
+    # Decrypt for blockchain storage (blockchain needs readable content)
+    decrypted_msg = decrypt_message(encrypted_msg)
     if decrypted_msg is None:
         logger.error(f"Decryption failed for message {msg_id} from {user_id}")
         emit("status", {"message": "Error decrypting message"})
         return
 
-    logger.debug(f"Received {msg_type} from {user_id}, ID: {msg_id}, Decrypted: {decrypted_msg}")
+    logger.debug(f"Processing {msg_type} from {user_id}, ID: {msg_id}")
 
     try:
-        # Store decrypted message in MongoDB
+        # Store ENCRYPTED message in MongoDB for P2P security
         messages_col.insert_one({
             "user_id": user_id,
-            "message": decrypted_msg,
+            "message": encrypted_msg,  # Store encrypted for security
             "msg_id": msg_id,
             "type": msg_type,
             "filename": filename,
             "timestamp": ts
         })
-        logger.debug(f"Message {msg_id} inserted into MongoDB")
+        logger.debug(f"Encrypted message {msg_id} stored securely")
     except Exception as e:
-        logger.error(f"Message insert failed for {msg_id}: {e}")
+        logger.error(f"Message storage failed for {msg_id}: {e}")
         emit("status", {"message": f"Error saving message: {str(e)}"})
         return
 
+    # Add decrypted content to blockchain for integrity verification
     if not blockchain.add_transaction(user_id, decrypted_msg, msg_type, filename, ts):
         logger.error(f"Failed to add transaction for {msg_id}: Message too large")
         emit("status", {"message": "Message too large"})
         return
 
+    # Mine block
     blockchain.async_mine_block()
 
-    # Encrypt message for broadcast
-    encrypted_msg = encrypt_message(decrypted_msg)
-    if encrypted_msg is None:
-        logger.error(f"Encryption failed for broadcast of {msg_id}")
-        emit("status", {"message": "Error encrypting message for broadcast"})
-        return
-
+    # Broadcast encrypted message to all connected clients
     msg_data = {
         "user_id": user_id,
         "message": encrypted_msg,
@@ -408,14 +416,15 @@ def handle_message(data):
         "filename": filename,
         "timestamp": ts
     }
-    logger.debug(f"Broadcasting message: {msg_data}")
-    emit("message", msg_data, broadcast=True)
+    
+    logger.debug(f"Broadcasting encrypted message: {msg_id}")
+    emit("message", msg_data, broadcast=True, include_self=False)
 
+    # Forward to P2P peers
     for client in peer_clients:
         try:
             client.emit("message", msg_data)
-            client.emit("sync_blockchain", json.dumps(blockchain.chain, default=str))
-            logger.debug("Forwarded message and blockchain to peer")
+            logger.debug("Forwarded encrypted message to peer")
         except Exception as e:
             logger.error(f"Failed to forward to peer: {e}")
 

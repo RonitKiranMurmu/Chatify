@@ -174,12 +174,17 @@
     const serverInfo = document.getElementById("server-info");
     const chatArea = document.getElementById("chat-area");
 
-    const keyHex = '6d9aff9e495776401fab839ae17d1df50c33a774b4eacd9133c3881e918b1d04';
-    const key = CryptoJS.enc.Hex.parse(keyHex);
-    console.log("Client encryption key:", key.toString(CryptoJS.enc.Hex));
+    // Use the same key derivation as server: SHA256 of "peerpulse-secret-2025"
+    const secretPhrase = "peerpulse-secret-2025";
+    const keyHash = CryptoJS.SHA256(secretPhrase);
+    const key = keyHash;
+    console.log("Client encryption key synchronized with server");
 
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
+
+    // Track processed message IDs to prevent duplicates
+    const processedMessageIds = new Set();
 
     // Helpers
     function toSeconds(rawTs) {
@@ -291,20 +296,27 @@
 
         let messages = JSON.parse(cached);
         let validMessages = [];
+        
         messages.forEach(msg => {
             if (!msg.message || typeof msg.message !== 'string' || !msg.msg_id) {
-                console.warn(`Skipping invalid cached message: ${JSON.stringify(msg)}`);
+                console.warn(`Skipping invalid cached message`);
                 return;
             }
 
+            // Skip if already processed
+            if (processedMessageIds.has(msg.msg_id)) {
+                return;
+            }
+            processedMessageIds.add(msg.msg_id);
+
             let contentHtml;
             const isSystem = msg.user_id === "System";
+            
             try {
-                console.log(`Attempting decryption for cached msg_id: ${msg.msg_id}, Ciphertext: ${msg.message.substring(0, 20)}...`);
                 const decrypted = decryptMessage(msg.message);
                 if (!decrypted) {
-                    console.warn(`Empty decrypted message for msg_id: ${msg.msg_id}`);
-                    contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
+                    console.warn(`Failed to decrypt cached message: ${msg.msg_id}`);
+                    contentHtml = isSystem ? '[Cached System Message]' : '[Cached Message - Decryption Failed]';
                 } else {
                     contentHtml = msg.type === 'file' ?
                         `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(msg.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(msg.filename || 'file')}</a>` :
@@ -312,8 +324,8 @@
                 }
                 validMessages.push(msg);
             } catch (e) {
-                console.error(`Decryption failed for cached message (msg_id: ${msg.msg_id}):`, e);
-                contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
+                console.error(`Decryption failed for cached message:`, e);
+                contentHtml = isSystem ? '[Cached System Error]' : '[Cached Decryption Error]';
             }
 
             appendMessage({
@@ -402,7 +414,15 @@
     });
 
     socket.on("message", (data) => {
-        console.log("Message received:", JSON.stringify(data, null, 2));
+        console.log("Message received:", data.msg_id);
+        
+        // Prevent duplicate message display
+        if (processedMessageIds.has(data.msg_id)) {
+            console.log("Duplicate message ignored:", data.msg_id);
+            return;
+        }
+        processedMessageIds.add(data.msg_id);
+        
         let messageContent = data.message || "";
         const userId = localStorage.getItem("userId") || "Unknown";
         const isSent = data.user_id === userId;
@@ -410,19 +430,18 @@
 
         let contentHtml;
         try {
-            console.log(`Attempting decryption for msg_id: ${data.msg_id}, Ciphertext: ${messageContent.substring(0, 20)}...`);
             const decrypted = decryptMessage(messageContent);
             if (!decrypted) {
-                console.warn(`Empty decrypted ${isSystem ? 'system ' : ''}message for msg_id: ${data.msg_id}`);
-                contentHtml = isSystem ? '[Empty System Message]' : '[Empty or Invalid Message]';
+                console.warn(`Decryption failed for message: ${data.msg_id}`);
+                contentHtml = isSystem ? '[System Message Error]' : '[Message Decryption Failed]';
             } else {
                 contentHtml = data.type === 'file' ?
                     `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a>` :
                     escapeHtml(decrypted);
             }
         } catch (e) {
-            console.error(`Decryption failed for ${isSystem ? 'system ' : ''}message msg_id: ${data.msg_id}:`, e);
-            contentHtml = isSystem ? '[System Decryption Error]' : '[Decryption Error]';
+            console.error(`Decryption error for message ${data.msg_id}:`, e);
+            contentHtml = isSystem ? '[System Error]' : '[Decryption Error]';
         }
 
         appendMessage({
@@ -432,6 +451,7 @@
             timestamp: data.timestamp
         });
 
+        // Cache the encrypted message
         let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
         messages.push(data);
         cacheMessages(messages);
@@ -464,14 +484,30 @@
         const message = messageInput.value.trim();
         if (message && userId && message.length <= 1000) {
             const encrypted = encryptMessage(message);
+            if (!encrypted) {
+                alert("Failed to encrypt message. Please try again.");
+                return;
+            }
+            
+            const msgId = uuid.v4();
             const msgData = {
                 user_id: userId,
                 message: encrypted,
-                msg_id: uuid.v4(),
+                msg_id: msgId,
                 type: "text",
                 timestamp: Math.floor(Date.now() / 1000)
             };
-            console.log("Sending message:", JSON.stringify(msgData, null, 2));
+            
+            // Show message immediately for better UX
+            processedMessageIds.add(msgId);
+            appendMessage({
+                user_id: userId,
+                contentHtml: escapeHtml(message),
+                isSent: true,
+                timestamp: msgData.timestamp
+            });
+            
+            console.log("Sending encrypted message:", msgId);
             socket.emit("message", msgData);
             messageInput.value = "";
             clearTimeout(typingTimeout);
@@ -501,15 +537,31 @@
             reader.onload = () => {
                 const base64Data = reader.result.split(',')[1];
                 const encrypted = encryptMessage(base64Data);
+                if (!encrypted) {
+                    alert("Failed to encrypt file. Please try again.");
+                    return;
+                }
+                
+                const msgId = uuid.v4();
                 const msgData = {
                     user_id: userId,
                     message: encrypted,
-                    msg_id: uuid.v4(),
+                    msg_id: msgId,
                     type: "file",
                     filename: file.name,
                     timestamp: Math.floor(Date.now() / 1000)
                 };
-                console.log("Sending file message:", JSON.stringify(msgData, null, 2));
+                
+                // Show file message immediately
+                processedMessageIds.add(msgId);
+                appendMessage({
+                    user_id: userId,
+                    contentHtml: `<a href="${reader.result}" download="${escapeHtml(file.name)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(file.name)}</a>`,
+                    isSent: true,
+                    timestamp: msgData.timestamp
+                });
+                
+                console.log("Sending encrypted file:", msgId);
                 socket.emit("message", msgData);
                 fileInput.value = "";
             };
