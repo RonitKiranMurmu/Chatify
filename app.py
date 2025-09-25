@@ -7,7 +7,7 @@ import uuid
 import time
 import socket
 from threading import Lock
-from flask import Flask, render_template, Response, request
+from flask import Flask, render_template, Response
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure
@@ -18,17 +18,24 @@ from Crypto.Util.Padding import pad, unpad
 import base64
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+log_level = logging.INFO if os.environ.get("RENDER") == "true" else logging.DEBUG
+logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("peerpulse")
 
 # Load environment variables
 load_dotenv()
 app = Flask(__name__, static_folder='static', static_url_path='/static')
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
+if not app.config["SECRET_KEY"]:
+    logger.error("SECRET_KEY environment variable not set!")
+    raise ValueError("SECRET_KEY must be set in environment variables")
+MONGO_URI = os.environ.get("MONGO_URI")
+if not MONGO_URI:
+    logger.error("MONGO_URI environment variable not set!")
+    raise ValueError("MONGO_URI must be set in environment variables")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
 # Use environment-based encryption key for security
-ENCRYPTION_SECRET = os.environ.get("ENCRYPTION_SECRET", "peerpulse-secret-2025")
+ENCRYPTION_SECRET = os.environ.get("ENCRYPTION_KEY", os.environ.get("ENCRYPTION_SECRET", "peerpulse-secret-2025"))
 ENCRYPTION_KEY = hashlib.sha256(ENCRYPTION_SECRET.encode('utf-8')).digest()
 ENCRYPTION_KEY_HEX = ENCRYPTION_KEY.hex()
 logger.info("Secure encryption system initialized for P2P decentralized chat")
@@ -45,7 +52,10 @@ if is_atlas:
         connectTimeoutMS=10000,
         serverSelectionTimeoutMS=10000,
         tls=True,
-        tlsAllowInvalidCertificates=False
+        tlsAllowInvalidCertificates=False,
+        # Additional security settings
+        maxIdleTimeMS=30000,
+        socketTimeoutMS=20000
     )
 else:
     mongo_client = MongoClient(
@@ -54,7 +64,9 @@ else:
         retryWrites=True,
         retryReads=True,
         connectTimeoutMS=10000,
-        serverSelectionTimeoutMS=10000
+        serverSelectionTimeoutMS=10000,
+        maxIdleTimeMS=30000,
+        socketTimeoutMS=20000
     )
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
@@ -139,6 +151,7 @@ def init_mongo():
     return mongo_client
 
 # Initialize SocketIO
+is_production = os.environ.get("RENDER") == "true"
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
@@ -146,8 +159,8 @@ socketio = SocketIO(
     ping_interval=40,
     transports=['websocket'],
     async_mode='gevent',
-    logger=True,
-    engineio_logger=True
+    logger=not is_production,  # Disable verbose logging in production
+    engineio_logger=not is_production
 )
 
 # Thread lock for mining
@@ -378,73 +391,15 @@ def favicon():
 @app.route('/encryption-key')
 def get_encryption_key():
     """Provide the encryption key hex to client for consistent encryption/decryption"""
+    # Security: Only provide key to authenticated clients in production
+    if os.environ.get("RENDER") == "true":
+        # In production, implement proper authentication before exposing this
+        logger.warning("Encryption key requested in production environment")
+        return {"error": "Key access restricted in production"}, 403
     logger.debug("Encryption key requested")
     return {"key": ENCRYPTION_KEY_HEX}
 
-@app.route('/debug/encryption')
-def debug_encryption():
-    """Debug endpoint to check encryption configuration (remove in production)"""
-    return {
-        "encryption_secret_set": bool(os.environ.get("ENCRYPTION_SECRET")),
-        "encryption_secret_length": len(os.environ.get("ENCRYPTION_SECRET", "")),
-        "encryption_key_hex_preview": ENCRYPTION_KEY_HEX[:16] + "...",
-        "environment": os.environ.get("RENDER", "local"),
-        "mongo_db": MONGO_DB
-    }
-
-@app.route('/admin/cleanup', methods=['GET', 'POST'])
-def admin_cleanup():
-    """Admin endpoint to cleanup old encrypted messages"""
-    if request.method == 'GET':
-        # Show cleanup form
-        try:
-            message_count = messages_col.count_documents({})
-            block_count = blocks_col.count_documents({})
-            
-            return f"""
-            <html>
-            <head><title>Database Cleanup</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h2>🧹 Database Cleanup</h2>
-                <p><strong>Database:</strong> {MONGO_DB}</p>
-                <p><strong>Messages:</strong> {message_count}</p>
-                <p><strong>Blocks:</strong> {block_count}</p>
-                
-                {f'<p style="color: orange;">⚠️ This will delete {message_count} messages and {block_count} blocks permanently!</p>' if (message_count > 0 or block_count > 0) else '<p style="color: green;">✅ Database is already clean!</p>'}
-                
-                <form method="POST" onsubmit="return confirm('Are you sure you want to delete all messages and blocks? This cannot be undone!')">
-                    <button type="submit" style="background: #ff4444; color: white; padding: 10px 20px; border: none; border-radius: 5px;">
-                        🗑️ Delete All Messages & Blocks
-                    </button>
-                </form>
-                
-                <p><a href="/">← Back to Chat</a></p>
-            </body>
-            </html>
-            """
-        except Exception as e:
-            return f"Error accessing database: {e}"
-    
-    elif request.method == 'POST':
-        # Perform cleanup
-        try:
-            result_messages = messages_col.delete_many({})
-            result_blocks = blocks_col.delete_many({})
-            
-            return f"""
-            <html>
-            <head><title>Cleanup Complete</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h2>✅ Cleanup Complete!</h2>
-                <p>Deleted {result_messages.deleted_count} messages</p>
-                <p>Deleted {result_blocks.deleted_count} blocks</p>
-                <p>Database is now clean and ready for new encrypted messages.</p>
-                <p><a href="/">← Back to Chat</a></p>
-            </body>
-            </html>
-            """
-        except Exception as e:
-            return f"Error during cleanup: {e}"
+# Debug endpoint removed for production security
 
 # Socket.IO Events
 @socketio.on('connect')
