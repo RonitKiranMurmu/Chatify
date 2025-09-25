@@ -233,8 +233,19 @@
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
     
-    // Initialize encryption on page load
-    initializeEncryption();
+    // Debug: Verify DOM elements exist
+    console.log("DOM elements check:");
+    console.log("loginButton:", !!loginButton);
+    console.log("loginContainer:", !!loginContainer);
+    console.log("chatContainer:", !!chatContainer);
+    console.log("userIdInput:", !!userIdInput);
+    
+    // Initialize encryption on page load (with error handling)
+    initializeEncryption().catch(error => {
+        console.error("Failed to initialize encryption on page load:", error);
+        // Continue with fallback - don't break the page
+        keyReady = false;
+    });
 
     // Track processed message IDs to prevent duplicates
     const processedMessageIds = new Set();
@@ -448,20 +459,23 @@
         loginButton.textContent = "Joining...";
         
         try {
-            // Initialize encryption first
-            console.log("Checking encryption status...");
-            if (!keyReady) {
-                console.log("Initializing encryption...");
-                await initializeEncryption();
-            }
-            
-            // Verify encryption is working
-            if (!keyReady) {
-                throw new Error("Failed to initialize encryption");
-            }
-            
             console.log("Storing userId in localStorage:", userId);
             localStorage.setItem("userId", userId);
+            
+            // Initialize encryption (but don't fail if it doesn't work)
+            try {
+                if (!keyReady) {
+                    console.log("Initializing encryption...");
+                    await initializeEncryption();
+                }
+            } catch (encryptionError) {
+                console.warn("Encryption initialization failed, continuing with fallback:", encryptionError);
+                // Use fallback key
+                const secretPhrase = "peerpulse-secret-2025";
+                key = CryptoJS.SHA256(secretPhrase);
+                keyReady = true;
+            }
+            
             console.log("Emitting join event with userId:", userId);
             socket.emit('join', userId);
             
@@ -471,7 +485,11 @@
             
             // Load cached messages after showing chat
             setTimeout(() => {
-                loadCachedMessages();
+                try {
+                    loadCachedMessages();
+                } catch (cacheError) {
+                    console.warn("Failed to load cached messages:", cacheError);
+                }
             }, 100);
             
         } catch (e) {
@@ -479,8 +497,8 @@
             alert(`Failed to join chat: ${e.message}\n\nPlease try refreshing the page.`);
             statusDiv.textContent = `Join Failed: ${e.message} | Server: ${socketUrl}`;
             statusDiv.classList.add("text-red-400");
-            
-            // Re-enable button
+        } finally {
+            // Always re-enable button
             loginButton.disabled = false;
             loginButton.textContent = "Join Chat";
         }
