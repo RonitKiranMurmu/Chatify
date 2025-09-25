@@ -27,8 +27,8 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret!")
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "peerpulse")
-# Use consistent encryption key for secure P2P storage
-ENCRYPTION_SECRET = "peerpulse-secret-2025"
+# Use environment-based encryption key for security
+ENCRYPTION_SECRET = os.environ.get("ENCRYPTION_SECRET", "peerpulse-secret-2025")
 ENCRYPTION_KEY = hashlib.sha256(ENCRYPTION_SECRET.encode('utf-8')).digest()
 ENCRYPTION_KEY_HEX = ENCRYPTION_KEY.hex()
 logger.info("Secure encryption system initialized for P2P decentralized chat")
@@ -137,7 +137,8 @@ def load_peers():
         with open("peers.json", "r") as f:
             peers = json.load(f)
             if os.environ.get("RENDER") == "true":
-                peers = [p.replace("http://localhost", "https://chatify-fcw1.onrender.com/") for p in peers]
+                render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+                peers = [p.replace("http://localhost", render_url) for p in peers]
             return peers
     except FileNotFoundError:
         logger.warning("peers.json not found, using command-line peer ports")
@@ -292,7 +293,10 @@ processed_messages = set()
 
 def connect_to_peers(peer_ports, host="localhost"):
     for p in peer_ports:
-        peer_url = f"http://{host}:{p}" if os.environ.get("RENDER") != "true" else "https://chatify-fcw1.onrender.com/"
+        if os.environ.get("RENDER") == "true":
+            peer_url = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+        else:
+            peer_url = f"http://{host}:{p}"
         if peer_url in peers:
             continue
         peers.append(peer_url)

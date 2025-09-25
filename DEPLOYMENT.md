@@ -1,4 +1,14 @@
-# 🔒 Secure Environment Setup for Render
+# 🔒 Secure Enviro# Security (Generate your own random)
+SECRET_KEY=your-super-long-random-secret-key-here
+
+# Encryption Secret (Generate unique secret)
+ENCRYPTION_SECRET=your-unique-encryption-secret-here
+
+# Environment Detection
+RENDER=true
+
+# External URL (Render sets automatically)
+RENDER_EXTERNAL_URL=https://your-app-name.onrender.com Setup for Render
 
 ## ⚠️ SECURITY NOTICE
 **NEVER commit real credentials to Git!** Always set sensitive values in the Render dashboard.

@@ -150,7 +150,7 @@
 
     // Socket setup
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const socketUrl = isLocal ? 'http://localhost:8000' : 'https://chatify-fcw1.onrender.com';
+    const socketUrl = isLocal ? 'http://localhost:8000' : window.location.origin;
     const socket = io(socketUrl, {
         transports: ['websocket'],
         reconnection: true,
