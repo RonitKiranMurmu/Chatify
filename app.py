@@ -48,6 +48,26 @@ mongo_client = MongoClient(
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
+
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
+# Mining lock for thread safety
+mine_lock = Lock()
+
+def init_mongo():
+    """Initialize MongoDB connection and verify it's working"""
+    try:
+        # Test the connection
+        mongo_client.admin.command('ping')
+        logger.info("MongoDB connection verified")
+        return True
+    except ConnectionFailure as e:
+        logger.error(f"MongoDB connection failed: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"MongoDB initialization error: {e}")
+        return False
 peers_col = db["peers"]
 
 def init_mongo():
@@ -506,7 +526,19 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     peer_ports = load_peers() or []
     local_ip = get_local_ip()
-    logger.info(f"Starting server on http://0.0.0.0:{port} (accessible at http://{local_ip}:{port})")
-    if peer_ports:
+    
+    # Detect production environment
+    is_production = (
+        os.environ.get("RENDER") == "true" or 
+        os.environ.get("RAILWAY_ENVIRONMENT") == "production" or
+        "onrender.com" in os.environ.get("RENDER_EXTERNAL_URL", "") or
+        MONGO_URI.startswith("mongodb+srv://")
+    )
+    
+    debug_mode = not is_production
+    logger.info(f"Starting server on http://0.0.0.0:{port} - Production: {is_production}")
+    
+    if peer_ports and not is_production:
         connect_to_peers(peer_ports, host=local_ip)
-    socketio.run(app, host="0.0.0.0", port=port, debug=True, use_reloader=False)
+    
+    socketio.run(app, host="0.0.0.0", port=port, debug=debug_mode, use_reloader=False)
