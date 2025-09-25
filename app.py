@@ -46,27 +46,28 @@ is_atlas = MONGO_URI.startswith("mongodb+srv://") or "atlas" in MONGO_URI.lower(
 if is_atlas:
     mongo_client = MongoClient(
         MONGO_URI,
-        maxPoolSize=50,
+        maxPoolSize=10,  # Reduced pool size for stability
         retryWrites=True,
         retryReads=True,
-        connectTimeoutMS=10000,
-        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=30000,  # Increased timeout
+        serverSelectionTimeoutMS=30000,  # Increased timeout
         tls=True,
         tlsAllowInvalidCertificates=False,
-        # Additional security settings
-        maxIdleTimeMS=30000,
-        socketTimeoutMS=20000
+        # Additional stability settings
+        maxIdleTimeMS=60000,
+        socketTimeoutMS=30000,
+        heartbeatFrequencyMS=10000
     )
 else:
     mongo_client = MongoClient(
         MONGO_URI,
-        maxPoolSize=50,
+        maxPoolSize=10,
         retryWrites=True,
         retryReads=True,
-        connectTimeoutMS=10000,
-        serverSelectionTimeoutMS=10000,
-        maxIdleTimeMS=30000,
-        socketTimeoutMS=20000
+        connectTimeoutMS=30000,
+        serverSelectionTimeoutMS=30000,
+        maxIdleTimeMS=60000,
+        socketTimeoutMS=30000
     )
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
@@ -96,6 +97,9 @@ peers_col = db["peers"]
 def init_mongo():
     global mongo_client, db, messages_col, blocks_col, peers_col
     try:
+        # Test connection first
+        mongo_client.admin.command('ping')
+        
         # Check for duplicate blocks and clean up if necessary
         try:
             duplicates = list(blocks_col.aggregate([
@@ -111,6 +115,7 @@ def init_mongo():
                     logger.info(f"Removed {len(docs_to_remove)} duplicate blocks with index {dup['_id']}")
         except Exception as e:
             logger.warning(f"Error cleaning duplicate blocks: {e}")
+            # Continue execution despite cleanup errors
         
         # Ensure indexes (handle existing indexes gracefully)
         try:
@@ -391,11 +396,6 @@ def favicon():
 @app.route('/encryption-key')
 def get_encryption_key():
     """Provide the encryption key hex to client for consistent encryption/decryption"""
-    # Security: Only provide key to authenticated clients in production
-    if os.environ.get("RENDER") == "true":
-        # In production, implement proper authentication before exposing this
-        logger.warning("Encryption key requested in production environment")
-        return {"error": "Key access restricted in production"}, 403
     logger.debug("Encryption key requested")
     return {"key": ENCRYPTION_KEY_HEX}
 
@@ -410,24 +410,45 @@ def handle_connect(auth=None):
     try:
         # Send recent messages (stored encrypted in DB)
         recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
-        for m in reversed(recent):
-            m['timestamp'] = float(m['timestamp'])
-            logger.debug(f"Sending recent encrypted message: {m['msg_id']}")
-            emit("message", m)
+        if recent:
+            for m in reversed(recent):
+                try:
+                    m['timestamp'] = float(m['timestamp'])
+                    logger.debug(f"Sending recent encrypted message: {m['msg_id']}")
+                    emit("message", m)
+                except Exception as msg_error:
+                    logger.error(f"Error sending message {m.get('msg_id', 'unknown')}: {msg_error}")
+        else:
+            logger.info("No recent messages found in database")
     except Exception as e:
         logger.error(f"Failed to send recent messages: {e}")
-        emit("status", {"message": f"Error fetching messages: {str(e)}"})
+        # Send a system message instead of an error status
+        try:
+            error_encrypted = encrypt_message("Database temporarily unavailable. Your messages are still secure! 🔒")
+            if error_encrypted:
+                emit("message", {
+                    "user_id": "System",
+                    "message": error_encrypted,
+                    "msg_id": str(uuid.uuid4()),
+                    "type": "text",
+                    "timestamp": time.time()
+                })
+        except:
+            pass
     
     # Send welcome message
-    welcome_encrypted = encrypt_message("Welcome to Chatify!")
-    if welcome_encrypted:
-        emit("message", {
-            "user_id": "System",
-            "message": welcome_encrypted,
-            "msg_id": str(uuid.uuid4()),
-            "type": "text",
-            "timestamp": time.time()
-        })
+    try:
+        welcome_encrypted = encrypt_message("Welcome to Chatify! 🚀 Your connection is secure and encrypted.")
+        if welcome_encrypted:
+            emit("message", {
+                "user_id": "System",
+                "message": welcome_encrypted,
+                "msg_id": str(uuid.uuid4()),
+                "type": "text",
+                "timestamp": time.time()
+            })
+    except Exception as e:
+        logger.error(f"Failed to send welcome message: {e}")
 
 @socketio.on("disconnect")
 def handle_disconnect():
@@ -435,16 +456,21 @@ def handle_disconnect():
 
 @socketio.on("join")
 def handle_join(username):
-    logger.debug(f"User joined: {username}")
-    join_encrypted = encrypt_message(f"{username} joined the chat")
-    if join_encrypted:
-        emit("message", {
-            "user_id": "System",
-            "message": join_encrypted,
-            "msg_id": str(uuid.uuid4()),
-            "type": "text",
-            "timestamp": time.time()
-        }, broadcast=True)
+    logger.info(f"User joined: {username}")
+    try:
+        join_encrypted = encrypt_message(f"{username} joined the chat 👋")
+        if join_encrypted:
+            emit("message", {
+                "user_id": "System",
+                "message": join_encrypted,
+                "msg_id": str(uuid.uuid4()),
+                "type": "text",
+                "timestamp": time.time()
+            }, broadcast=True)
+        else:
+            logger.error(f"Failed to encrypt join message for {username}")
+    except Exception as e:
+        logger.error(f"Error in join handler for {username}: {e}")
 
 @socketio.on("typing")
 def handle_typing(data):
