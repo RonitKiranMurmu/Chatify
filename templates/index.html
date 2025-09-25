@@ -535,7 +535,7 @@
         statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
     });
 
-    socket.on("message", (data) => {
+    socket.on("message", async (data) => {
         console.log("Message received:", data.msg_id);
         
         // Prevent duplicate message display
