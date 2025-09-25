@@ -381,6 +381,17 @@ def get_encryption_key():
     logger.debug("Encryption key requested")
     return {"key": ENCRYPTION_KEY_HEX}
 
+@app.route('/debug/encryption')
+def debug_encryption():
+    """Debug endpoint to check encryption configuration (remove in production)"""
+    return {
+        "encryption_secret_set": bool(os.environ.get("ENCRYPTION_SECRET")),
+        "encryption_secret_length": len(os.environ.get("ENCRYPTION_SECRET", "")),
+        "encryption_key_hex_preview": ENCRYPTION_KEY_HEX[:16] + "...",
+        "environment": os.environ.get("RENDER", "local"),
+        "mongo_db": MONGO_DB
+    }
+
 # Socket.IO Events
 @socketio.on('connect')
 def handle_connect(auth=None):
