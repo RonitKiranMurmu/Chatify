@@ -57,9 +57,7 @@ def create_mongo_client():
             maxIdleTimeMS=120000,
             heartbeatFrequencyMS=30000,
             tls=True,
-            tlsAllowInvalidCertificates=False,
-            # Force TLS version
-            tlsInsecure=False
+            tlsAllowInvalidCertificates=False
         )
     else:
         return MongoClient(
