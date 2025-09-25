@@ -307,6 +307,11 @@
             // Debug logging
             console.log("Attempting to decrypt message:", ciphertextBase64.substring(0, 50) + "...");
             
+            // Validate base64 format first
+            if (!/^[A-Za-z0-9+/]+=*$/.test(ciphertextBase64)) {
+                throw new Error('Invalid base64 format');
+            }
+            
             const decoded = CryptoJS.enc.Base64.parse(ciphertextBase64);
             if (decoded.sigBytes < 16) {
                 throw new Error('Ciphertext too short: ' + decoded.sigBytes + ' bytes');
@@ -365,7 +370,7 @@
     // Helper function to detect if text looks like encrypted data
     function isLikelyEncryptedText(text) {
         // Check if text looks like base64 encoded data
-        if (text.length < 20) return false;
+        if (text.length < 40) return false; // Increase minimum length
         
         // Base64 pattern: mostly alphanumeric with +, /, = characters
         const base64Pattern = /^[A-Za-z0-9+/]+=*$/;
@@ -375,7 +380,19 @@
         const urlSafeBase64Pattern = /^[A-Za-z0-9_-]+=*$/;
         const isUrlSafeBase64Like = urlSafeBase64Pattern.test(text.replace(/\s/g, ''));
         
-        return (isBase64Like || isUrlSafeBase64Like) && text.length > 20;
+        // Additional checks to avoid false positives
+        const hasRepeatingChars = /(.)\1{10,}/.test(text); // Avoid texts with many repeated chars
+        const hasCommonWords = /\b(the|and|is|it|you|that|for|with|was|are|have|this|will|can|on|at|by|be|or|an|as|your|all|any|each|which|their|time|if|up|may|could|would|about|out|many|then|them|these|so|some|her|him|into|has|had|his|been|to|only|other|new|old|see|two|way|who|boy|did|its|let|put|say|she|too|use)\b/i.test(text);
+        const looksLikeHTML = /<[^>]+>/.test(text);
+        const looksLikeURL = /https?:\/\//.test(text);
+        
+        // Don't treat normal text as encrypted
+        if (hasCommonWords || looksLikeHTML || looksLikeURL || hasRepeatingChars) {
+            return false;
+        }
+        
+        // Must be base64-like AND long enough AND look random
+        return (isBase64Like || isUrlSafeBase64Like) && text.length > 40;
     }
     
     // Enhanced decryption that handles double-encrypted messages
@@ -650,16 +667,26 @@
     // Store all messages to sort them properly
     let allMessages = [];
     let blockchainLoadingComplete = false;
+    
+    // Cache for decrypted messages to avoid re-decryption
+    const decryptionCache = new Map();
 
     socket.on("message", async (data) => {
         console.log("Message received:", data.msg_id);
         
+        // Handle different message ID formats and validate
+        let messageId = data.msg_id;
+        if (!messageId || messageId.length < 8) {
+            console.warn("Invalid message ID, generating fallback:", messageId);
+            messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
         // Prevent duplicate message display
-        if (processedMessageIds.has(data.msg_id)) {
-            console.log("Duplicate message ignored:", data.msg_id);
+        if (processedMessageIds.has(messageId)) {
+            console.log("Duplicate message ignored:", messageId);
             return;
         }
-        processedMessageIds.add(data.msg_id);
+        processedMessageIds.add(messageId);
         
         let messageContent = data.message || "";
         const userId = localStorage.getItem("userId") || "Unknown";
@@ -668,24 +695,48 @@
 
         let contentHtml;
         try {
-            // Check if encryption is ready before attempting decryption
-            if (!keyReady) {
-                console.warn("Encryption not ready, waiting...");
-                await initializeEncryption();
-            }
-            
-            const decrypted = smartDecrypt(messageContent);
-            if (!decrypted) {
-                console.warn(`Smart decryption failed for message: ${data.msg_id}`);
-                // Don't show raw encrypted text, show error message instead
-                contentHtml = isSystem ? '[System Message Error]' : '[Message Decryption Failed]';
+            // Check cache first to avoid re-decryption
+            if (decryptionCache.has(messageContent)) {
+                const cachedDecryption = decryptionCache.get(messageContent);
+                console.log("Using cached decryption for message:", messageId.substring(0, 8));
+                contentHtml = cachedDecryption;
             } else {
-                contentHtml = data.type === 'file' ?
-                    `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a>` :
-                    escapeHtml(decrypted);
+                // Check if encryption is ready before attempting decryption
+                if (!keyReady) {
+                    console.warn("Encryption not ready, waiting...");
+                    await initializeEncryption();
+                }
+                
+                // Check if message looks like it needs decryption
+                const needsDecryption = messageContent.length > 20 && 
+                                      /^[A-Za-z0-9+/]+=*$/.test(messageContent.replace(/\s/g, ''));
+                
+                let decrypted;
+                if (needsDecryption) {
+                    decrypted = smartDecrypt(messageContent);
+                } else {
+                    // Treat as plain text for very short or non-base64 messages
+                    decrypted = messageContent;
+                }
+                
+                if (!decrypted && needsDecryption) {
+                    console.warn(`Smart decryption failed for message: ${messageId}`);
+                    // Don't show raw encrypted text, show error message instead
+                    contentHtml = isSystem ? '[System Message Error]' : '[Message Decryption Failed]';
+                } else {
+                    const finalContent = decrypted || messageContent;
+                    contentHtml = data.type === 'file' ?
+                        `<a href="data:application/octet-stream;base64,${escapeHtml(finalContent)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a>` :
+                        escapeHtml(finalContent);
+                    
+                    // Cache the result
+                    if (needsDecryption && decrypted) {
+                        decryptionCache.set(messageContent, contentHtml);
+                    }
+                }
             }
         } catch (e) {
-            console.error(`Decryption error for message ${data.msg_id}:`, e);
+            console.error(`Decryption error for message ${messageId}:`, e);
             contentHtml = isSystem ? '[System Error]' : '[Decryption Error]';
         }
 
@@ -695,7 +746,7 @@
             contentHtml,
             isSent,
             timestamp: data.timestamp,
-            msg_id: data.msg_id,
+            msg_id: messageId, // Use the validated messageId
             is_blockchain_load: data.is_blockchain_load
         };
 
