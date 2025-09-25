@@ -139,6 +139,7 @@
 
         <div id="status" class="mt-2">
             Connecting... | Server: <span id="server-info"></span>
+            <button onclick="forceResetApplication(); location.reload();" style="margin-left: 10px; padding: 2px 8px; font-size: 0.75rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer;">Reset Chat</button>
         </div>
     </div>
 
@@ -180,7 +181,17 @@
     
     function clearMessageCache() {
         localStorage.removeItem('chatMessages');
-        console.log("Message cache cleared");
+        localStorage.removeItem('lastEncryptionKey');
+        sessionStorage.clear(); // Clear session storage too
+        console.log("All message cache and storage cleared");
+    }
+    
+    function forceResetApplication() {
+        // Clear all storage
+        clearMessageCache();
+        // Clear chat area
+        chatArea.innerHTML = '';
+        console.log("Application reset completed");
     }
     
     // Fetch encryption key from server
@@ -189,11 +200,15 @@
             const response = await fetch('/encryption-key');
             const data = await response.json();
             
-            // Check if encryption key has changed
+            // Check if encryption key has changed OR if this is first time
             const lastEncryptionKey = localStorage.getItem('lastEncryptionKey');
-            if (lastEncryptionKey && lastEncryptionKey !== data.key) {
-                console.log("Encryption key changed, clearing old cached messages");
-                clearMessageCache();
+            const appVersion = localStorage.getItem('appVersion');
+            const currentVersion = "2.0"; // Version with new encryption system
+            
+            if (!lastEncryptionKey || lastEncryptionKey !== data.key || appVersion !== currentVersion) {
+                console.log("Encryption system updated or key changed, resetting application");
+                forceResetApplication();
+                localStorage.setItem('appVersion', currentVersion);
             }
             
             key = CryptoJS.enc.Hex.parse(data.key);
@@ -205,8 +220,8 @@
             console.log("Client encryption key synchronized with server");
         } catch (error) {
             console.error("Failed to fetch encryption key:", error);
-            // Clear cache if we can't get server key (potential key mismatch)
-            clearMessageCache();
+            // Force reset if we can't get server key
+            forceResetApplication();
             // Fallback to default key for compatibility
             const secretPhrase = "peerpulse-secret-2025";
             key = CryptoJS.SHA256(secretPhrase);
@@ -273,14 +288,17 @@
 
     function decryptMessage(ciphertextBase64) {
         if (!keyReady || !key) {
-            console.error("Decryption key not ready");
+            console.error("Decryption key not ready, keyReady:", keyReady, "key:", !!key);
             return null;
         }
         
         try {
+            // Debug logging
+            console.log("Attempting to decrypt message:", ciphertextBase64.substring(0, 50) + "...");
+            
             const decoded = CryptoJS.enc.Base64.parse(ciphertextBase64);
             if (decoded.sigBytes < 16) {
-                throw new Error('Ciphertext too short');
+                throw new Error('Ciphertext too short: ' + decoded.sigBytes + ' bytes');
             }
 
             // Extract IV (first 16 bytes / 4 words)
@@ -308,9 +326,12 @@
             if (!plaintext) {
                 throw new Error('Decryption resulted in empty string');
             }
+            console.log("Decryption successful:", plaintext.substring(0, 50) + "...");
             return plaintext;
         } catch (error) {
-            console.error('Decryption error:', error.message);
+            console.error('Decryption failed for message:', ciphertextBase64.substring(0, 50) + "...");
+            console.error('Decryption error details:', error.message);
+            console.error('Key ready:', keyReady, 'Key exists:', !!key);
             return null;  // Or handle gracefully
         }
     }
@@ -492,10 +513,17 @@
 
         let contentHtml;
         try {
+            // Check if encryption is ready before attempting decryption
+            if (!keyReady) {
+                console.warn("Encryption not ready, waiting...");
+                await initializeEncryption();
+            }
+            
             const decrypted = decryptMessage(messageContent);
             if (!decrypted) {
                 console.warn(`Decryption failed for message: ${data.msg_id}`);
-                contentHtml = isSystem ? '[System Message Error]' : '[Message Decryption Failed]';
+                // Don't show raw encrypted text, show error message instead
+                contentHtml = isSystem ? '[System Message Error]' : '[Message Decryption Failed - Key Mismatch]';
             } else {
                 contentHtml = data.type === 'file' ?
                     `<a href="data:application/octet-stream;base64,${escapeHtml(decrypted)}" download="${escapeHtml(data.filename || 'file')}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(data.filename || 'file')}</a>` :
