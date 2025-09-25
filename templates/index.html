@@ -174,14 +174,33 @@
     const serverInfo = document.getElementById("server-info");
     const chatArea = document.getElementById("chat-area");
 
-    // Use the same key derivation as server: SHA256 of "peerpulse-secret-2025"
-    const secretPhrase = "peerpulse-secret-2025";
-    const keyHash = CryptoJS.SHA256(secretPhrase);
-    const key = keyHash;
-    console.log("Client encryption key synchronized with server");
+    // Dynamic encryption key from server
+    let key = null;
+    let keyReady = false;
+    
+    // Fetch encryption key from server
+    async function initializeEncryption() {
+        try {
+            const response = await fetch('/encryption-key');
+            const data = await response.json();
+            key = CryptoJS.enc.Hex.parse(data.key);
+            keyReady = true;
+            console.log("Client encryption key synchronized with server");
+        } catch (error) {
+            console.error("Failed to fetch encryption key:", error);
+            // Fallback to default key for compatibility
+            const secretPhrase = "peerpulse-secret-2025";
+            key = CryptoJS.SHA256(secretPhrase);
+            keyReady = true;
+            console.log("Using fallback encryption key");
+        }
+    }
 
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
+    
+    // Initialize encryption on page load
+    initializeEncryption();
 
     // Track processed message IDs to prevent duplicates
     const processedMessageIds = new Set();
@@ -214,6 +233,11 @@
     }
 
     function encryptMessage(plaintext) {
+        if (!keyReady || !key) {
+            console.error("Encryption key not ready");
+            return null;
+        }
+        
         const iv = CryptoJS.lib.WordArray.random(16);
         const encrypted = CryptoJS.AES.encrypt(
             plaintext,
@@ -229,6 +253,11 @@
     }
 
     function decryptMessage(ciphertextBase64) {
+        if (!keyReady || !key) {
+            console.error("Decryption key not ready");
+            return null;
+        }
+        
         try {
             const decoded = CryptoJS.enc.Base64.parse(ciphertextBase64);
             if (decoded.sigBytes < 16) {
@@ -290,9 +319,15 @@
         localStorage.setItem('chatMessages', JSON.stringify(validMessages.slice(-100)));
     }
 
-    function loadCachedMessages() {
+    async function loadCachedMessages() {
         const cached = localStorage.getItem('chatMessages');
         if (!cached) return;
+
+        // Ensure encryption is ready before processing cached messages
+        if (!keyReady) {
+            console.log("Encryption not ready for cached messages, initializing...");
+            await initializeEncryption();
+        }
 
         let messages = JSON.parse(cached);
         let validMessages = [];
@@ -350,7 +385,7 @@
     });
 
     // Login
-    loginButton.onclick = () => {
+    loginButton.onclick = async () => {
         console.log("Login button clicked");
         const userId = userIdInput.value.trim();
         console.log(`User ID entered: "${userId}"`);
@@ -367,6 +402,12 @@
         }
 
         try {
+            // Initialize encryption first
+            if (!keyReady) {
+                console.log("Initializing encryption...");
+                await initializeEncryption();
+            }
+            
             console.log("Storing userId in localStorage:", userId);
             localStorage.setItem("userId", userId);
             console.log("Emitting join event with userId:", userId);
@@ -479,42 +520,50 @@
 
     // Send text
     let typingTimeout;
-    sendButton.onclick = () => {
+    sendButton.onclick = async () => {
         const userId = localStorage.getItem("userId") || "Unknown";
         const message = messageInput.value.trim();
-        if (message && userId && message.length <= 1000) {
-            const encrypted = encryptMessage(message);
-            if (!encrypted) {
-                alert("Failed to encrypt message. Please try again.");
-                return;
-            }
-            
-            const msgId = uuid.v4();
-            const msgData = {
-                user_id: userId,
-                message: encrypted,
-                msg_id: msgId,
-                type: "text",
-                timestamp: Math.floor(Date.now() / 1000)
-            };
-            
-            // Show message immediately for better UX
-            processedMessageIds.add(msgId);
-            appendMessage({
-                user_id: userId,
-                contentHtml: escapeHtml(message),
-                isSent: true,
-                timestamp: msgData.timestamp
-            });
-            
-            console.log("Sending encrypted message:", msgId);
-            socket.emit("message", msgData);
-            messageInput.value = "";
-            clearTimeout(typingTimeout);
-            socket.emit("stop_typing", { user_id: userId });
-        } else {
+        
+        if (!message || !userId || message.length > 1000) {
             alert("Please enter a valid message (max 1000 characters).");
+            return;
         }
+        
+        // Ensure encryption is ready
+        if (!keyReady) {
+            console.log("Encryption not ready, initializing...");
+            await initializeEncryption();
+        }
+        
+        const encrypted = encryptMessage(message);
+        if (!encrypted) {
+            alert("Failed to encrypt message. Please try again.");
+            return;
+        }
+        
+        const msgId = uuid.v4();
+        const msgData = {
+            user_id: userId,
+            message: encrypted,
+            msg_id: msgId,
+            type: "text",
+            timestamp: Math.floor(Date.now() / 1000)
+        };
+        
+        // Show message immediately for better UX
+        processedMessageIds.add(msgId);
+        appendMessage({
+            user_id: userId,
+            contentHtml: escapeHtml(message),
+            isSent: true,
+            timestamp: msgData.timestamp
+        });
+        
+        console.log("Sending encrypted message:", msgId);
+        socket.emit("message", msgData);
+        messageInput.value = "";
+        clearTimeout(typingTimeout);
+        socket.emit("stop_typing", { user_id: userId });
     };
 
     messageInput.addEventListener("input", () => {
@@ -529,46 +578,54 @@
     });
 
     // Send file
-    fileButton.onclick = () => {
+    fileButton.onclick = async () => {
         const userId = localStorage.getItem("userId") || "Unknown";
         const file = fileInput.files[0];
-        if (file && userId && file.size <= 1 * 1024 * 1024) {
-            const reader = new FileReader();
-            reader.onload = () => {
-                const base64Data = reader.result.split(',')[1];
-                const encrypted = encryptMessage(base64Data);
-                if (!encrypted) {
-                    alert("Failed to encrypt file. Please try again.");
-                    return;
-                }
-                
-                const msgId = uuid.v4();
-                const msgData = {
-                    user_id: userId,
-                    message: encrypted,
-                    msg_id: msgId,
-                    type: "file",
-                    filename: file.name,
-                    timestamp: Math.floor(Date.now() / 1000)
-                };
-                
-                // Show file message immediately
-                processedMessageIds.add(msgId);
-                appendMessage({
-                    user_id: userId,
-                    contentHtml: `<a href="${reader.result}" download="${escapeHtml(file.name)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(file.name)}</a>`,
-                    isSent: true,
-                    timestamp: msgData.timestamp
-                });
-                
-                console.log("Sending encrypted file:", msgId);
-                socket.emit("message", msgData);
-                fileInput.value = "";
-            };
-            reader.readAsDataURL(file);
-        } else {
+        
+        if (!file || !userId || file.size > 1 * 1024 * 1024) {
             alert("Please select a valid file (max 1MB).");
+            return;
         }
+        
+        // Ensure encryption is ready
+        if (!keyReady) {
+            console.log("Encryption not ready, initializing...");
+            await initializeEncryption();
+        }
+        
+        const reader = new FileReader();
+        reader.onload = () => {
+            const base64Data = reader.result.split(',')[1];
+            const encrypted = encryptMessage(base64Data);
+            if (!encrypted) {
+                alert("Failed to encrypt file. Please try again.");
+                return;
+            }
+            
+            const msgId = uuid.v4();
+            const msgData = {
+                user_id: userId,
+                message: encrypted,
+                msg_id: msgId,
+                type: "file",
+                filename: file.name,
+                timestamp: Math.floor(Date.now() / 1000)
+            };
+            
+            // Show file message immediately
+            processedMessageIds.add(msgId);
+            appendMessage({
+                user_id: userId,
+                contentHtml: `<a href="${reader.result}" download="${escapeHtml(file.name)}" class="underline" style="color: var(--brand-strong);">Download ${escapeHtml(file.name)}</a>`,
+                isSent: true,
+                timestamp: msgData.timestamp
+            });
+            
+            console.log("Sending encrypted file:", msgId);
+            socket.emit("message", msgData);
+            fileInput.value = "";
+        };
+        reader.readAsDataURL(file);
     };
 </script>
 </body>

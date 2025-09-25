@@ -34,17 +34,28 @@ ENCRYPTION_KEY_HEX = ENCRYPTION_KEY.hex()
 logger.info("Secure encryption system initialized for P2P decentralized chat")
 
 # Initialize MongoDB client at startup
-mongo_client = MongoClient(
-    MONGO_URI,
-    maxPoolSize=50,
-    retryWrites=True,
-    retryReads=True,
-    connectTimeoutMS=10000,
-    serverSelectionTimeoutMS=10000,
-    # Auto-detect TLS for Atlas vs local MongoDB
-    tls=MONGO_URI.startswith("mongodb+srv://") or "atlas" in MONGO_URI.lower(),
-    tlsAllowInvalidCertificates=False
-)
+is_atlas = MONGO_URI.startswith("mongodb+srv://") or "atlas" in MONGO_URI.lower()
+
+if is_atlas:
+    mongo_client = MongoClient(
+        MONGO_URI,
+        maxPoolSize=50,
+        retryWrites=True,
+        retryReads=True,
+        connectTimeoutMS=10000,
+        serverSelectionTimeoutMS=10000,
+        tls=True,
+        tlsAllowInvalidCertificates=False
+    )
+else:
+    mongo_client = MongoClient(
+        MONGO_URI,
+        maxPoolSize=50,
+        retryWrites=True,
+        retryReads=True,
+        connectTimeoutMS=10000,
+        serverSelectionTimeoutMS=10000
+    )
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
@@ -73,14 +84,58 @@ peers_col = db["peers"]
 def init_mongo():
     global mongo_client, db, messages_col, blocks_col, peers_col
     try:
-        # Ensure indexes
-        messages_col.create_index([("msg_id", ASCENDING)], unique=True)
-        messages_col.create_index([("timestamp", DESCENDING)])
-        blocks_col.create_index([("index", ASCENDING)], unique=True)
-        blocks_col.create_index([("previous_hash", ASCENDING)])
-        logger.info("MongoDB connection established")
+        # Check for duplicate blocks and clean up if necessary
+        try:
+            duplicates = list(blocks_col.aggregate([
+                {"$group": {"_id": "$index", "count": {"$sum": 1}, "docs": {"$push": "$_id"}}},
+                {"$match": {"count": {"$gt": 1}}}
+            ]))
+            
+            for dup in duplicates:
+                # Keep the first document, remove the rest
+                docs_to_remove = dup["docs"][1:]
+                if docs_to_remove:
+                    blocks_col.delete_many({"_id": {"$in": docs_to_remove}})
+                    logger.info(f"Removed {len(docs_to_remove)} duplicate blocks with index {dup['_id']}")
+        except Exception as e:
+            logger.warning(f"Error cleaning duplicate blocks: {e}")
+        
+        # Ensure indexes (handle existing indexes gracefully)
+        try:
+            messages_col.create_index([("msg_id", ASCENDING)], unique=True)
+        except Exception as e:
+            if "duplicate key" in str(e).lower() or "already exists" in str(e).lower():
+                logger.info("Messages index already exists")
+            else:
+                logger.warning(f"Messages index creation issue: {e}")
+        
+        try:
+            messages_col.create_index([("timestamp", DESCENDING)])
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                logger.info("Messages timestamp index already exists")
+            else:
+                logger.warning(f"Messages timestamp index issue: {e}")
+        
+        try:
+            blocks_col.create_index([("index", ASCENDING)], unique=True)
+        except Exception as e:
+            if "duplicate key" in str(e).lower() or "already exists" in str(e).lower():
+                logger.info("Blocks index already exists")
+            else:
+                logger.warning(f"Blocks index creation issue: {e}")
+        
+        try:
+            blocks_col.create_index([("previous_hash", ASCENDING)])
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                logger.info("Blocks previous_hash index already exists")
+            else:
+                logger.warning(f"Blocks previous_hash index issue: {e}")
+        
+        logger.info("MongoDB connection established and indexes verified")
     except Exception as e:
-        logger.error(f"Failed to create indexes: {e}")
+        logger.error(f"MongoDB initialization error: {e}")
     return mongo_client
 
 # Initialize SocketIO
@@ -319,6 +374,12 @@ def index():
 def favicon():
     logger.debug("Favicon requested, returning empty response")
     return Response(status=204)
+
+@app.route('/encryption-key')
+def get_encryption_key():
+    """Provide the encryption key hex to client for consistent encryption/decryption"""
+    logger.debug("Encryption key requested")
+    return {"key": ENCRYPTION_KEY_HEX}
 
 # Socket.IO Events
 @socketio.on('connect')
