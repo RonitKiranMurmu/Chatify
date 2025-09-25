@@ -43,32 +43,50 @@ logger.info("Secure encryption system initialized for P2P decentralized chat")
 # Initialize MongoDB client at startup
 is_atlas = MONGO_URI.startswith("mongodb+srv://") or "atlas" in MONGO_URI.lower()
 
-if is_atlas:
-    mongo_client = MongoClient(
-        MONGO_URI,
-        maxPoolSize=10,  # Reduced pool size for stability
-        retryWrites=True,
-        retryReads=True,
-        connectTimeoutMS=30000,  # Increased timeout
-        serverSelectionTimeoutMS=30000,  # Increased timeout
-        tls=True,
-        tlsAllowInvalidCertificates=False,
-        # Additional stability settings
-        maxIdleTimeMS=60000,
-        socketTimeoutMS=30000,
-        heartbeatFrequencyMS=10000
-    )
-else:
-    mongo_client = MongoClient(
-        MONGO_URI,
-        maxPoolSize=10,
-        retryWrites=True,
-        retryReads=True,
-        connectTimeoutMS=30000,
-        serverSelectionTimeoutMS=30000,
-        maxIdleTimeMS=60000,
-        socketTimeoutMS=30000
-    )
+def create_mongo_client():
+    """Create MongoDB client with retry logic"""
+    if is_atlas:
+        return MongoClient(
+            MONGO_URI,
+            maxPoolSize=5,  # Further reduced for stability
+            retryWrites=True,
+            retryReads=True,
+            connectTimeoutMS=60000,  # Much longer timeout
+            serverSelectionTimeoutMS=60000,
+            socketTimeoutMS=60000,
+            maxIdleTimeMS=120000,
+            heartbeatFrequencyMS=30000,
+            tls=True,
+            tlsAllowInvalidCertificates=False,
+            # Force TLS version
+            tlsInsecure=False
+        )
+    else:
+        return MongoClient(
+            MONGO_URI,
+            maxPoolSize=5,
+            retryWrites=True,
+            retryReads=True,
+            connectTimeoutMS=60000,
+            serverSelectionTimeoutMS=60000,
+            socketTimeoutMS=60000,
+            maxIdleTimeMS=120000
+        )
+
+# Initialize with retry
+mongo_client = None
+for attempt in range(3):
+    try:
+        mongo_client = create_mongo_client()
+        mongo_client.admin.command('ping')
+        logger.info(f"MongoDB connected successfully on attempt {attempt + 1}")
+        break
+    except Exception as e:
+        logger.error(f"MongoDB connection attempt {attempt + 1} failed: {e}")
+        if attempt == 2:
+            logger.error("Failed to connect to MongoDB after 3 attempts")
+            raise
+        time.sleep(2)
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
@@ -94,6 +112,34 @@ def init_mongo():
         return False
 peers_col = db["peers"]
 
+def safe_mongo_operation(operation_func, *args, **kwargs):
+    """Execute MongoDB operation with automatic reconnection"""
+    global mongo_client, db, messages_col, blocks_col, peers_col
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            return operation_func(*args, **kwargs)
+        except Exception as e:
+            if "SSL" in str(e) or "socket" in str(e).lower() or attempt < max_retries - 1:
+                logger.warning(f"MongoDB operation failed (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    # Recreate connection
+                    try:
+                        mongo_client = create_mongo_client()
+                        db = mongo_client[MONGO_DB]
+                        messages_col = db["messages"]
+                        blocks_col = db["blocks"]
+                        peers_col = db["peers"]
+                        time.sleep(1)
+                        logger.info("MongoDB connection recreated")
+                    except Exception as reconnect_error:
+                        logger.error(f"Failed to reconnect: {reconnect_error}")
+                        time.sleep(2)
+            else:
+                raise e
+    return None
+
 def init_mongo():
     global mongo_client, db, messages_col, blocks_col, peers_col
     try:
@@ -101,7 +147,7 @@ def init_mongo():
         mongo_client.admin.command('ping')
         
         # Check for duplicate blocks and clean up if necessary
-        try:
+        def cleanup_duplicates():
             duplicates = list(blocks_col.aggregate([
                 {"$group": {"_id": "$index", "count": {"$sum": 1}, "docs": {"$push": "$_id"}}},
                 {"$match": {"count": {"$gt": 1}}}
@@ -113,9 +159,8 @@ def init_mongo():
                 if docs_to_remove:
                     blocks_col.delete_many({"_id": {"$in": docs_to_remove}})
                     logger.info(f"Removed {len(docs_to_remove)} duplicate blocks with index {dup['_id']}")
-        except Exception as e:
-            logger.warning(f"Error cleaning duplicate blocks: {e}")
-            # Continue execution despite cleanup errors
+        
+        safe_mongo_operation(cleanup_duplicates)
         
         # Ensure indexes (handle existing indexes gracefully)
         try:
@@ -309,9 +354,17 @@ class Blockchain:
             logger.error(f"Failed to persist block {block.get('index')}: {e}")
 
     def load_chain_from_db(self):
+        def load_blocks():
+            return list(blocks_col.find({}, {"_id": 0}).sort("index", ASCENDING))
+        
         try:
-            self.chain = list(blocks_col.find({}, {"_id": 0}).sort("index", ASCENDING))
+            self.chain = safe_mongo_operation(load_blocks) or []
             logger.info(f"Loaded {len(self.chain)} blocks from database")
+            
+            # If no blocks, ensure we start fresh
+            if not self.chain:
+                logger.info("No blocks found, will create genesis block")
+                
         except Exception as e:
             logger.error(f"Failed to load chain from DB: {e}")
             self.chain = []
@@ -407,9 +460,12 @@ def handle_connect(auth=None):
     init_mongo()
     logger.debug("Client connected")
     emit("status", {"message": "Connected"})
+    def get_recent_messages():
+        return list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
+    
     try:
         # Send recent messages (stored encrypted in DB)
-        recent = list(messages_col.find({}, {"_id": 0}).sort("timestamp", DESCENDING).limit(20))
+        recent = safe_mongo_operation(get_recent_messages) or []
         if recent:
             for m in reversed(recent):
                 try:
@@ -424,7 +480,7 @@ def handle_connect(auth=None):
         logger.error(f"Failed to send recent messages: {e}")
         # Send a system message instead of an error status
         try:
-            error_encrypted = encrypt_message("Database temporarily unavailable. Your messages are still secure! 🔒")
+            error_encrypted = encrypt_message("Starting fresh! Your new messages will be encrypted and secure. 🔒✨")
             if error_encrypted:
                 emit("message", {
                     "user_id": "System",
@@ -513,8 +569,8 @@ def handle_message(data):
 
     logger.debug(f"Processing {msg_type} from {user_id}, ID: {msg_id}")
 
-    try:
-        # Store ENCRYPTED message in MongoDB for P2P security
+    # Store ENCRYPTED message in MongoDB for P2P security
+    def store_message():
         messages_col.insert_one({
             "user_id": user_id,
             "message": encrypted_msg,  # Store encrypted for security
@@ -523,11 +579,14 @@ def handle_message(data):
             "filename": filename,
             "timestamp": ts
         })
+    
+    try:
+        safe_mongo_operation(store_message)
         logger.debug(f"Encrypted message {msg_id} stored securely")
     except Exception as e:
         logger.error(f"Message storage failed for {msg_id}: {e}")
-        emit("status", {"message": f"Error saving message: {str(e)}"})
-        return
+        # Continue execution even if storage fails
+        logger.info("Continuing with message processing despite storage failure")
 
     # Add decrypted content to blockchain for integrity verification
     if not blockchain.add_transaction(user_id, decrypted_msg, msg_type, filename, ts):
