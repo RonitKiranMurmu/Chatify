@@ -7,7 +7,7 @@ import uuid
 import time
 import socket
 from threading import Lock
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, request
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure
@@ -391,6 +391,60 @@ def debug_encryption():
         "environment": os.environ.get("RENDER", "local"),
         "mongo_db": MONGO_DB
     }
+
+@app.route('/admin/cleanup', methods=['GET', 'POST'])
+def admin_cleanup():
+    """Admin endpoint to cleanup old encrypted messages"""
+    if request.method == 'GET':
+        # Show cleanup form
+        try:
+            message_count = messages_col.count_documents({})
+            block_count = blocks_col.count_documents({})
+            
+            return f"""
+            <html>
+            <head><title>Database Cleanup</title></head>
+            <body style="font-family: Arial; padding: 20px;">
+                <h2>🧹 Database Cleanup</h2>
+                <p><strong>Database:</strong> {MONGO_DB}</p>
+                <p><strong>Messages:</strong> {message_count}</p>
+                <p><strong>Blocks:</strong> {block_count}</p>
+                
+                {f'<p style="color: orange;">⚠️ This will delete {message_count} messages and {block_count} blocks permanently!</p>' if (message_count > 0 or block_count > 0) else '<p style="color: green;">✅ Database is already clean!</p>'}
+                
+                <form method="POST" onsubmit="return confirm('Are you sure you want to delete all messages and blocks? This cannot be undone!')">
+                    <button type="submit" style="background: #ff4444; color: white; padding: 10px 20px; border: none; border-radius: 5px;">
+                        🗑️ Delete All Messages & Blocks
+                    </button>
+                </form>
+                
+                <p><a href="/">← Back to Chat</a></p>
+            </body>
+            </html>
+            """
+        except Exception as e:
+            return f"Error accessing database: {e}"
+    
+    elif request.method == 'POST':
+        # Perform cleanup
+        try:
+            result_messages = messages_col.delete_many({})
+            result_blocks = blocks_col.delete_many({})
+            
+            return f"""
+            <html>
+            <head><title>Cleanup Complete</title></head>
+            <body style="font-family: Arial; padding: 20px;">
+                <h2>✅ Cleanup Complete!</h2>
+                <p>Deleted {result_messages.deleted_count} messages</p>
+                <p>Deleted {result_blocks.deleted_count} blocks</p>
+                <p>Database is now clean and ready for new encrypted messages.</p>
+                <p><a href="/">← Back to Chat</a></p>
+            </body>
+            </html>
+            """
+        except Exception as e:
+            return f"Error during cleanup: {e}"
 
 # Socket.IO Events
 @socketio.on('connect')
