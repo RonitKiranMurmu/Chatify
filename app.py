@@ -670,15 +670,27 @@ def handle_request_blockchain(data=None):
                 if isinstance(tx.get("message"), str):
                     # Message is already encrypted, no need to re-encrypt
                     transactions.append(tx)
-        transactions.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-        for tx in transactions[offset:offset + limit]:
+        # Sort in chronological order (oldest first) for proper infinite scroll
+        transactions.sort(key=lambda x: x.get("timestamp", 0), reverse=False)
+        
+        # For pagination, we want to skip from the END and work backwards
+        total_count = len(transactions)
+        start_idx = max(0, total_count - offset - limit)
+        end_idx = max(0, total_count - offset)
+        
+        # Send messages in reverse order so oldest appear at top
+        selected_transactions = transactions[start_idx:end_idx]
+        selected_transactions.reverse()  # Reverse so oldest loads at top
+        
+        for tx in selected_transactions:
             emit("message", {
                 "user_id": tx.get("user_id", "Unknown"),
                 "message": tx.get("message", ""),
                 "msg_id": str(uuid.uuid4()),
                 "type": tx.get("type", "text"),
                 "filename": tx.get("filename", ""),
-                "timestamp": float(tx.get("timestamp", time.time()))
+                "timestamp": float(tx.get("timestamp", time.time())),
+                "is_blockchain_load": True  # Flag to identify blockchain-loaded messages
             })
         logger.info(f"Sent blockchain transactions (offset: {offset}, limit: {limit})")
     except Exception as e:

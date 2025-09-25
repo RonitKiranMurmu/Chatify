@@ -388,6 +388,20 @@
         chatArea.scrollTop = chatArea.scrollHeight;
     }
 
+    function prependMessage({ user_id, contentHtml, isSent, timestamp }) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `message ${isSent ? 'sent' : 'received'}`;
+        wrapper.innerHTML =
+            `<span class="user-id">${escapeHtml(user_id)}:</span> ${contentHtml}
+             <div class="timestamp">${formatTimestamp(timestamp)}</div>`;
+        
+        // Insert at the beginning and preserve scroll position
+        const oldScrollHeight = chatArea.scrollHeight;
+        chatArea.insertBefore(wrapper, chatArea.firstChild);
+        const newScrollHeight = chatArea.scrollHeight;
+        chatArea.scrollTop += (newScrollHeight - oldScrollHeight);
+    }
+
     // Message caching
     function cacheMessages(messages) {
         const validMessages = messages.filter(msg =>
@@ -458,15 +472,30 @@
         cacheMessages(validMessages);
     }
 
-    // Infinite scroll
+    // Infinite scroll for loading older messages
     let messageOffset = 0;
+    let isLoadingMessages = false;
+    
     chatArea.addEventListener('scroll', () => {
-        if (chatArea.scrollTop === 0) {
+        // Trigger when scrolled to top (to load older messages)
+        if (chatArea.scrollTop === 0 && !isLoadingMessages) {
             console.log(`Requesting blockchain messages, offset: ${messageOffset}`);
+            isLoadingMessages = true;
             socket.emit('request_blockchain', { offset: messageOffset, limit: 20 });
             messageOffset += 20;
+            
+            // Reset loading flag after a short delay
+            setTimeout(() => {
+                isLoadingMessages = false;
+            }, 1000);
         }
     });
+    
+    // Reset message offset when user logs in
+    function resetMessageOffset() {
+        messageOffset = 0;
+        isLoadingMessages = false;
+    }
 
     // Login
     loginButton.onclick = async () => {
@@ -513,6 +542,9 @@
             // Show chat interface
             loginContainer.classList.add("hidden");
             chatContainer.classList.remove("hidden");
+            
+            // Reset message pagination
+            resetMessageOffset();
             
             // Load cached messages after showing chat
             setTimeout(() => {
@@ -604,17 +636,27 @@
             contentHtml = isSystem ? '[System Error]' : '[Decryption Error]';
         }
 
-        appendMessage({
-            user_id: data.user_id || "Unknown",
-            contentHtml,
-            isSent,
-            timestamp: data.timestamp
-        });
-
-        // Cache the encrypted message
-        let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
-        messages.push(data);
-        cacheMessages(messages);
+        // Use prependMessage for blockchain-loaded messages, appendMessage for real-time messages
+        if (data.is_blockchain_load) {
+            prependMessage({
+                user_id: data.user_id || "Unknown",
+                contentHtml,
+                isSent,
+                timestamp: data.timestamp
+            });
+        } else {
+            appendMessage({
+                user_id: data.user_id || "Unknown",
+                contentHtml,
+                isSent,
+                timestamp: data.timestamp
+            });
+            
+            // Only cache real-time messages (not blockchain loads)
+            let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
+            messages.push(data);
+            cacheMessages(messages);
+        }
     });
 
     socket.on("typing", (data) => {
