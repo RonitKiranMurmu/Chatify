@@ -690,6 +690,9 @@ def handle_request_blockchain(data=None):
                 "timestamp": float(tx.get("timestamp", time.time())),
                 "is_blockchain_load": True  # Flag to identify blockchain-loaded messages
             })
+        
+        # Signal that blockchain loading is complete
+        emit("blockchain_complete")
         logger.info(f"Sent blockchain transactions (offset: {offset}, limit: {limit})")
     except Exception as e:
         logger.error(f"Failed to send blockchain: {e}")

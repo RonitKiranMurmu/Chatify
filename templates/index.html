@@ -503,7 +503,36 @@
     // Load all blockchain messages on login - no infinite scroll for now
     function loadAllBlockchainMessages() {
         console.log("Loading all blockchain messages...");
+        allMessages = []; // Reset message array
+        blockchainLoadingComplete = false;
         socket.emit('request_blockchain', { offset: 0, limit: 1000 }); // Load all messages
+        
+        // Set a timeout to mark loading as complete and display messages
+        setTimeout(() => {
+            displaySortedMessages();
+        }, 2000); // Give 2 seconds for all blockchain messages to arrive
+    }
+
+    // Display all messages in chronological order
+    function displaySortedMessages() {
+        console.log("Displaying sorted blockchain messages...");
+        blockchainLoadingComplete = true;
+        
+        // Sort all messages by timestamp (oldest first)
+        allMessages.sort((a, b) => a.timestamp - b.timestamp);
+        
+        // Clear chat area and redisplay all messages in order
+        chatArea.innerHTML = '';
+        processedMessageIds.clear();
+        
+        allMessages.forEach(msg => {
+            if (!processedMessageIds.has(msg.msg_id)) {
+                processedMessageIds.add(msg.msg_id);
+                appendMessage(msg);
+            }
+        });
+        
+        console.log(`Displayed ${allMessages.length} blockchain messages in chronological order`);
     }
     
     // Reset message state when user logs in
@@ -618,6 +647,10 @@
         statusDiv.classList.toggle("text-green-600", data.message === 'Connected');
     });
 
+    // Store all messages to sort them properly
+    let allMessages = [];
+    let blockchainLoadingComplete = false;
+
     socket.on("message", async (data) => {
         console.log("Message received:", data.msg_id);
         
@@ -656,16 +689,24 @@
             contentHtml = isSystem ? '[System Error]' : '[Decryption Error]';
         }
 
-        // Always append messages in chronological order
-        appendMessage({
+        // Store message for proper sorting
+        const messageObj = {
             user_id: data.user_id || "Unknown",
             contentHtml,
             isSent,
-            timestamp: data.timestamp
-        });
-        
-        // Only cache real-time messages (not blockchain loads)
-        if (!data.is_blockchain_load) {
+            timestamp: data.timestamp,
+            msg_id: data.msg_id,
+            is_blockchain_load: data.is_blockchain_load
+        };
+
+        if (data.is_blockchain_load) {
+            // Collect blockchain messages for sorting
+            allMessages.push(messageObj);
+        } else {
+            // Real-time message - display immediately
+            appendMessage(messageObj);
+            
+            // Cache real-time messages
             let messages = JSON.parse(localStorage.getItem('chatMessages') || '[]');
             messages.push(data);
             cacheMessages(messages);
@@ -690,6 +731,11 @@
         statusDiv.classList.remove("text-green-600");
         statusDiv.classList.add("text-red-400");
         alert("Disconnected from server. Please refresh to reconnect.");
+    });
+
+    socket.on("blockchain_complete", () => {
+        console.log("Blockchain loading complete signal received");
+        displaySortedMessages();
     });
 
     // Send text
