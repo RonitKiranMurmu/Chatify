@@ -670,23 +670,21 @@ def handle_request_blockchain(data=None):
                 if isinstance(tx.get("message"), str):
                     # Message is already encrypted, no need to re-encrypt
                     transactions.append(tx)
-        # Sort in chronological order (oldest first) for proper infinite scroll
+        # Sort in chronological order (oldest first)
         transactions.sort(key=lambda x: x.get("timestamp", 0), reverse=False)
         
-        # For pagination, we want to skip from the END and work backwards
-        total_count = len(transactions)
-        start_idx = max(0, total_count - offset - limit)
-        end_idx = max(0, total_count - offset)
+        # Simple pagination: skip 'offset' messages and take 'limit' messages
+        paginated_transactions = transactions[offset:offset + limit]
         
-        # Send messages in reverse order so oldest appear at top
-        selected_transactions = transactions[start_idx:end_idx]
-        selected_transactions.reverse()  # Reverse so oldest loads at top
-        
-        for tx in selected_transactions:
+        for tx in paginated_transactions:
+            # Create consistent msg_id based on content and timestamp to prevent duplicates
+            msg_content = f"{tx.get('user_id', 'Unknown')}:{tx.get('message', '')}:{tx.get('timestamp', 0)}"
+            msg_id = hashlib.md5(msg_content.encode()).hexdigest()
+            
             emit("message", {
                 "user_id": tx.get("user_id", "Unknown"),
                 "message": tx.get("message", ""),
-                "msg_id": str(uuid.uuid4()),
+                "msg_id": msg_id,
                 "type": tx.get("type", "text"),
                 "filename": tx.get("filename", ""),
                 "timestamp": float(tx.get("timestamp", time.time())),
