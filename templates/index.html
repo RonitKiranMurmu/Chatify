@@ -206,8 +206,8 @@
             const currentVersion = "2.0"; // Version with new encryption system
             
             if (!lastEncryptionKey || lastEncryptionKey !== data.key || appVersion !== currentVersion) {
-                console.log("Encryption system updated or key changed, resetting application");
-                forceResetApplication();
+                console.log("Encryption system updated or key changed, clearing cache");
+                clearMessageCache();
                 localStorage.setItem('appVersion', currentVersion);
             }
             
@@ -220,13 +220,13 @@
             console.log("Client encryption key synchronized with server");
         } catch (error) {
             console.error("Failed to fetch encryption key:", error);
-            // Force reset if we can't get server key
-            forceResetApplication();
+            // Clear cache but don't force reset during login
+            clearMessageCache();
             // Fallback to default key for compatibility
             const secretPhrase = "peerpulse-secret-2025";
             key = CryptoJS.SHA256(secretPhrase);
             keyReady = true;
-            console.log("Using fallback encryption key");
+            console.log("Using fallback encryption key due to server error");
         }
     }
 
@@ -443,25 +443,46 @@
             return;
         }
 
+        // Disable button to prevent double-clicks
+        loginButton.disabled = true;
+        loginButton.textContent = "Joining...";
+        
         try {
             // Initialize encryption first
+            console.log("Checking encryption status...");
             if (!keyReady) {
                 console.log("Initializing encryption...");
                 await initializeEncryption();
+            }
+            
+            // Verify encryption is working
+            if (!keyReady) {
+                throw new Error("Failed to initialize encryption");
             }
             
             console.log("Storing userId in localStorage:", userId);
             localStorage.setItem("userId", userId);
             console.log("Emitting join event with userId:", userId);
             socket.emit('join', userId);
+            
+            // Show chat interface
             loginContainer.classList.add("hidden");
             chatContainer.classList.remove("hidden");
-            loadCachedMessages();
+            
+            // Load cached messages after showing chat
+            setTimeout(() => {
+                loadCachedMessages();
+            }, 100);
+            
         } catch (e) {
             console.error("Error during login process:", e);
-            alert(`Failed to join chat: ${e.message}`);
+            alert(`Failed to join chat: ${e.message}\n\nPlease try refreshing the page.`);
             statusDiv.textContent = `Join Failed: ${e.message} | Server: ${socketUrl}`;
             statusDiv.classList.add("text-red-400");
+            
+            // Re-enable button
+            loginButton.disabled = false;
+            loginButton.textContent = "Join Chat";
         }
     };
 
