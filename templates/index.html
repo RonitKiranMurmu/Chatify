@@ -333,10 +333,25 @@
             );
 
             // Convert to UTF-8
-            const plaintext = decrypted.toString(CryptoJS.enc.Utf8);
+            let plaintext = decrypted.toString(CryptoJS.enc.Utf8);
             if (!plaintext) {
                 throw new Error('Decryption resulted in empty string');
             }
+            
+            // Check if the result is still encrypted (double encryption fix)
+            if (isLikelyEncryptedText(plaintext)) {
+                console.warn("Detected double-encrypted message, attempting second decryption...");
+                try {
+                    const secondDecryption = decryptMessage(plaintext);
+                    if (secondDecryption && !isLikelyEncryptedText(secondDecryption)) {
+                        console.log("Double decryption successful:", secondDecryption.substring(0, 50) + "...");
+                        return secondDecryption;
+                    }
+                } catch (secondError) {
+                    console.warn("Second decryption failed, using first result");
+                }
+            }
+            
             console.log("Decryption successful:", plaintext.substring(0, 50) + "...");
             return plaintext;
         } catch (error) {
@@ -345,6 +360,22 @@
             console.error('Key ready:', keyReady, 'Key exists:', !!key);
             return null;  // Or handle gracefully
         }
+    }
+
+    // Helper function to detect if text looks like encrypted data
+    function isLikelyEncryptedText(text) {
+        // Check if text looks like base64 encoded data
+        if (text.length < 20) return false;
+        
+        // Base64 pattern: mostly alphanumeric with +, /, = characters
+        const base64Pattern = /^[A-Za-z0-9+/]+=*$/;
+        const isBase64Like = base64Pattern.test(text.replace(/\s/g, ''));
+        
+        // Also check for URL-safe base64 (- and _ instead of + and /)
+        const urlSafeBase64Pattern = /^[A-Za-z0-9_-]+=*$/;
+        const isUrlSafeBase64Like = urlSafeBase64Pattern.test(text.replace(/\s/g, ''));
+        
+        return (isBase64Like || isUrlSafeBase64Like) && text.length > 20;
     }
 
     function appendMessage({ user_id, contentHtml, isSent, timestamp }) {
