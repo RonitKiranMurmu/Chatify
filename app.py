@@ -586,8 +586,8 @@ def handle_message(data):
         # Continue execution even if storage fails
         logger.info("Continuing with message processing despite storage failure")
 
-    # Add decrypted content to blockchain for integrity verification
-    if not blockchain.add_transaction(user_id, decrypted_msg, msg_type, filename, ts):
+    # Add encrypted message to blockchain (consistent with MongoDB storage)
+    if not blockchain.add_transaction(user_id, encrypted_msg, msg_type, filename, ts):
         logger.error(f"Failed to add transaction for {msg_id}: Message too large")
         emit("status", {"message": "Message too large"})
         return
@@ -668,12 +668,8 @@ def handle_request_blockchain(data=None):
         for block in chain_copy:
             for tx in block.get("transactions", []):
                 if isinstance(tx.get("message"), str):
-                    encrypted_tx = encrypt_message(tx["message"])
-                    if encrypted_tx is None:
-                        logger.error(f"Encryption failed for blockchain transaction: {tx}")
-                        continue
-                    tx["message"] = encrypted_tx
-                transactions.append(tx)
+                    # Message is already encrypted, no need to re-encrypt
+                    transactions.append(tx)
         transactions.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
         for tx in transactions[offset:offset + limit]:
             emit("message", {
