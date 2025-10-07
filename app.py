@@ -6,13 +6,17 @@ import logging
 import uuid
 import time
 import socket
+import jwt
+from datetime import datetime, timedelta
+from functools import wraps
 from threading import Lock
-from flask import Flask, render_template, Response
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, Response, request, redirect, url_for, make_response, jsonify
+from flask_socketio import SocketIO, emit, disconnect
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure
 import socketio as sio
 from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 import base64
@@ -88,9 +92,8 @@ for attempt in range(3):
 db = mongo_client[MONGO_DB]
 messages_col = db["messages"]
 blocks_col = db["blocks"]
-
-# Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+peers_col = db["peers"]
+users_col = db["users"]
 
 # Mining lock for thread safety
 mine_lock = Lock()
@@ -197,6 +200,89 @@ def init_mongo():
     except Exception as e:
         logger.error(f"MongoDB initialization error: {e}")
     return mongo_client
+
+
+# --- JWT Auth helpers --------------------------------------------------
+JWT_SECRET = os.environ.get("JWT_SECRET", os.environ.get("SECRET_KEY"))
+JWT_ALGORITHM = "HS256"
+JWT_EXP_DAYS = int(os.environ.get("JWT_EXP_DAYS", 7))
+
+def create_jwt(payload: dict) -> str:
+    to_encode = payload.copy()
+    expire = datetime.utcnow() + timedelta(days=JWT_EXP_DAYS)
+    to_encode.update({"exp": expire})
+    token = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token
+
+def verify_jwt(token: str) -> dict | None:
+    try:
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return decoded
+    except Exception as e:
+        logger.debug(f"JWT verification failed: {e}")
+        return None
+
+def login_required(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        token = request.cookies.get("access_token")
+        if not token:
+            return jsonify({"error": "authentication_required"}), 401
+        data = verify_jwt(token)
+        if not data:
+            resp = make_response(jsonify({"error": "invalid_token"}), 401)
+            resp.set_cookie("access_token", "", expires=0, httponly=True, samesite='Lax')
+            return resp
+        request.user = data
+        return f(*args, **kwargs)
+    return wrapped
+
+
+# --- Auth routes ------------------------------------------------------
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'GET':
+        return render_template('register.html')
+    data = request.form or request.get_json() or {}
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({"error": "username_password_required"}), 400
+    # Check existing
+    if users_col.find_one({"username": username}):
+        return jsonify({"error": "user_exists"}), 400
+    hashed = generate_password_hash(password)
+    users_col.insert_one({"username": username, "password": hashed, "created_at": time.time()})
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'GET':
+        return render_template('login.html')
+    data = request.form or request.get_json() or {}
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({"error": "username_password_required"}), 400
+    user = users_col.find_one({"username": username})
+    if not user or not check_password_hash(user.get('password', ''), password):
+        return jsonify({"error": "invalid_credentials"}), 401
+    token = create_jwt({"username": username})
+    resp = make_response(redirect(url_for('index')))
+    # HttpOnly cookie for XSS protection
+    resp.set_cookie('access_token', token, httponly=True, samesite='Lax')
+    return resp
+
+@app.route('/logout')
+def logout():
+    resp = make_response(redirect(url_for('index')))
+    resp.set_cookie('access_token', '', expires=0, httponly=True, samesite='Lax')
+    return resp
+
+@app.route('/me')
+@login_required
+def me():
+    return jsonify({"user": request.user})
 
 # Initialize SocketIO
 is_production = os.environ.get("RENDER") == "true"

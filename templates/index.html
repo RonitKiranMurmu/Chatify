@@ -119,8 +119,13 @@
     <!-- Login -->
     <div id="login-container" class="max-w-md mx-auto mt-10">
         <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Join Chatify</h2>
+        <p style="text-align:center;">You can login/register with server accounts or enter a temporary local ID.</p>
         <input type="text" id="user-id-input" placeholder="Your ID (e.g., user1)" class="w-full mb-4">
-        <button id="login-button" class="w-full">Join Chat</button>
+        <div class="flex space-x-2">
+            <button id="login-button" class="flex-1">Join Chat (Local)</button>
+            <button id="server-login" class="flex-1">Server Login</button>
+        </div>
+        <p style="text-align:center; margin-top:8px;"><a href="/register">Register</a> — <a href="/login">Login</a></p>
     </div>
 
     <!-- Chat -->
@@ -232,6 +237,31 @@
 
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
+
+    // Check server-side auth
+    let serverUser = null;
+    async function checkServerAuth() {
+        try {
+            const r = await fetch('/me');
+            if (!r.ok) return null;
+            const j = await r.json();
+            if (j && j.user && j.user.username) {
+                serverUser = j.user.username;
+                console.log('Server auth detected:', serverUser);
+                // Use server username as userId
+                localStorage.setItem('userId', serverUser);
+                // Auto-join
+                loginContainer.classList.add('hidden');
+                chatContainer.classList.remove('hidden');
+                socket.emit('join', serverUser);
+                resetMessageState();
+                loadAllBlockchainMessages();
+            }
+        } catch (e) {
+            // not logged in or /me not available
+        }
+    }
+    checkServerAuth();
     
     // Debug: Verify DOM elements exist
     console.log("DOM elements check:");
@@ -560,7 +590,7 @@
         processedMessageIds.clear();
     }
 
-    // Login
+    // Login (local)
     loginButton.onclick = async () => {
         console.log("Login button clicked");
         const userId = userIdInput.value.trim();
@@ -631,6 +661,12 @@
             loginButton.disabled = false;
             loginButton.textContent = "Join Chat";
         }
+    };
+
+    // Redirect to server login page
+    const serverLoginBtn = document.getElementById('server-login');
+    serverLoginBtn.onclick = () => {
+        window.location.href = '/login';
     };
 
     // Socket events
