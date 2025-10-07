@@ -125,6 +125,9 @@
             <button id="login-button" class="flex-1">Join Chat (Local)</button>
             <button id="server-login" class="flex-1">Login</button>
         </div>
+        <div class="flex justify-center mt-3">
+            <button id="logout-button-top" style="padding:6px 10px; font-size:0.85rem; background:#ef4444; color:white; border:none; border-radius:6px; cursor:pointer; display:none;">Logout</button>
+        </div>
         <p style="text-align:center; margin-top:8px;"><a href="/register">Register</a></p>
     </div>
 
@@ -239,8 +242,26 @@
     serverInfo.textContent = socketUrl;
     userIdInput.value = localStorage.getItem("userId") || "";
 
-    // Check server-side auth
+    // Server-side auth user (may be set by checkServerAuth)
     let serverUser = null;
+
+    // Update auth-related UI (logout visibility) in one place
+    function updateAuthUI() {
+        const logoutBtn = document.getElementById('logout-button');
+        const logoutTopBtn = document.getElementById('logout-button-top');
+        const hasUser = !!localStorage.getItem('userId') || !!serverUser;
+        if (logoutBtn) {
+            logoutBtn.style.display = hasUser ? 'inline-block' : 'none';
+        }
+        if (logoutTopBtn) {
+            logoutTopBtn.style.display = hasUser ? 'inline-block' : 'none';
+        }
+    }
+
+    // Ensure UI is correct on initial load
+    updateAuthUI();
+
+    // Check server-side auth
     async function checkServerAuth() {
         try {
             const r = await fetch('/me');
@@ -258,7 +279,7 @@
                 resetMessageState();
                 loadAllBlockchainMessages();
                 // show logout button
-                document.getElementById('logout-button').style.display = 'inline-block';
+                updateAuthUI();
             }
         } catch (e) {
             // not logged in or /me not available
@@ -641,6 +662,8 @@
             
             // Reset message state
             resetMessageState();
+            // Make logout visible immediately after join (no refresh required)
+            updateAuthUI();
             
             // Load all blockchain messages (contains complete history)
             setTimeout(() => {
@@ -686,10 +709,17 @@
         window.location.href = '/login?logged_out=1';
     };
 
-    // Show logout button if local userId exists (for local login)
-    if (localStorage.getItem('userId')) {
-        document.getElementById('logout-button').style.display = 'inline-block';
+    // Top logout button (login screen) wiring
+    const logoutTopBtn = document.getElementById('logout-button-top');
+    if (logoutTopBtn) {
+        logoutTopBtn.onclick = () => {
+            // reuse existing logout handler logic
+            try { logoutBtn && logoutBtn.onclick && logoutBtn.onclick(); } catch (e) { console.warn('Top logout failed to call bottom handler:', e); }
+        };
     }
+
+    // Ensure logout UI reflects current auth state
+    updateAuthUI();
 
     // Socket events
     socket.on("connect", () => {
