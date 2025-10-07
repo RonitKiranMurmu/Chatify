@@ -145,6 +145,7 @@
         <div id="status" class="mt-2">
             Connecting... | Server: <span id="server-info"></span>
             <button onclick="forceResetApplication(); location.reload();" style="margin-left: 10px; padding: 2px 8px; font-size: 0.75rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer;">Reset Chat</button>
+            <button id="logout-button" style="margin-left:8px; padding:2px 8px; font-size:0.75rem; background:#6b7280; color:white; border:none; border-radius:4px; cursor:pointer; display:none;">Logout</button>
         </div>
     </div>
 
@@ -256,6 +257,8 @@
                 socket.emit('join', serverUser);
                 resetMessageState();
                 loadAllBlockchainMessages();
+                // show logout button
+                document.getElementById('logout-button').style.display = 'inline-block';
             }
         } catch (e) {
             // not logged in or /me not available
@@ -668,6 +671,25 @@
     serverLoginBtn.onclick = () => {
         window.location.href = '/login';
     };
+
+    // Logout handling (calls server to clear cookie, clears local client state)
+    const logoutBtn = document.getElementById('logout-button');
+    logoutBtn.onclick = async () => {
+        try {
+            await fetch('/logout');
+        } catch (e) {
+            console.warn('Logout request failed:', e);
+        }
+        // Clear local state and reload
+        clearMessageCache();
+        localStorage.removeItem('userId');
+        location.reload();
+    };
+
+    // Show logout button if local userId exists (for local login)
+    if (localStorage.getItem('userId')) {
+        document.getElementById('logout-button').style.display = 'inline-block';
+    }
 
     // Socket events
     socket.on("connect", () => {
