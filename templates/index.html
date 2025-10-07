@@ -123,9 +123,9 @@
         <input type="text" id="user-id-input" placeholder="Your ID (e.g., user1)" class="w-full mb-4">
         <div class="flex space-x-2">
             <button id="login-button" class="flex-1">Join Chat (Local)</button>
-            <button id="server-login" class="flex-1">Server Login</button>
+            <button id="server-login" class="flex-1">Login</button>
         </div>
-        <p style="text-align:center; margin-top:8px;"><a href="/register">Register</a> — <a href="/login">Login</a></p>
+        <p style="text-align:center; margin-top:8px;"><a href="/register">Register</a></p>
     </div>
 
     <!-- Chat -->
@@ -145,7 +145,7 @@
         <div id="status" class="mt-2">
             Connecting... | Server: <span id="server-info"></span>
             <button onclick="forceResetApplication(); location.reload();" style="margin-left: 10px; padding: 2px 8px; font-size: 0.75rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer;">Reset Chat</button>
-            <button id="logout-button" style="margin-left:8px; padding:2px 8px; font-size:0.75rem; background:#6b7280; color:white; border:none; border-radius:4px; cursor:pointer; display:none;">Logout</button>
+            <button id="logout-button" style="margin-left:8px; padding:2px 8px; font-size:0.75rem; background:#ef4444; color:white; border:none; border-radius:4px; cursor:pointer; display:none;">Logout</button>
         </div>
     </div>
 
@@ -680,10 +680,10 @@
         } catch (e) {
             console.warn('Logout request failed:', e);
         }
-        // Clear local state and reload
+        // Clear local state and redirect to login page with a logout confirmation flag
         clearMessageCache();
         localStorage.removeItem('userId');
-        location.reload();
+        window.location.href = '/login?logged_out=1';
     };
 
     // Show logout button if local userId exists (for local login)
