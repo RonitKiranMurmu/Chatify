@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}Register - Chatify{% endblock %}
+
+{% block body %}
+<!-- Theme Toggle Button -->
+<button id="themeToggle" onclick="toggleTheme()" class="fixed top-4 right-4 p-3 bg-white dark:bg-gray-800 rounded-lg shadow-lg hover:shadow-xl transition z-50" title="Toggle theme">
+    <i id="themeIcon" class="fas fa-moon text-gray-600 dark:text-gray-400"></i>
+</button>
+
+<div class="min-h-screen flex items-center justify-center px-4 py-12 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800">
+    <div class="max-w-md w-full">
+        <!-- Logo/Header -->
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-full mb-4">
+                <i class="fas fa-shield-alt text-2xl text-white"></i>
+            </div>
+            <h2 class="text-3xl font-bold text-gray-800 dark:text-white">Create Account</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-2">Join Chatify for secure messaging</p>
+        </div>
+        
+        <!-- Registration Form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-8">
+            <form id="registerForm" class="space-y-6">
+                <!-- Username -->
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <i class="fas fa-user mr-1"></i> Username
+                    </label>
+                    <input 
+                        type="text" 
+                        id="username" 
+                        name="username" 
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        placeholder="Enter username"
+                        autocomplete="username"
+                    >
+                    <p class="text-xs text-gray-500 mt-1">3-30 characters, letters, numbers, - and _ only</p>
+                </div>
+                
+                <!-- Password -->
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <i class="fas fa-lock mr-1"></i> Password
+                    </label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        placeholder="Enter password"
+                        autocomplete="new-password"
+                    >
+                    <p class="text-xs text-gray-500 mt-1">At least 8 characters with letters and numbers</p>
+                </div>
+                
+                <!-- Confirm Password -->
+                <div>
+                    <label for="confirm_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <i class="fas fa-lock mr-1"></i> Confirm Password
+                    </label>
+                    <input 
+                        type="password" 
+                        id="confirm_password" 
+                        name="confirm_password" 
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        placeholder="Confirm password"
+                        autocomplete="new-password"
+                    >
+                </div>
+                
+                <!-- Key Generation Status -->
+                <div id="keyGenStatus" class="hidden bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg p-3">
+                    <div class="flex items-center">
+                        <i class="fas fa-key text-blue-600 dark:text-blue-400 mr-2"></i>
+                        <span class="text-sm text-blue-800 dark:text-blue-200">Generating encryption keys...</span>
+                    </div>
+                </div>
+                
+                <!-- Error Message -->
+                <div id="errorMessage" class="hidden bg-red-50 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-lg p-3">
+                    <i class="fas fa-exclamation-triangle text-red-600 dark:text-red-400 mr-2"></i>
+                    <span class="text-sm text-red-800 dark:text-red-200"></span>
+                </div>
+                
+                <!-- Submit Button -->
+                <button 
+                    type="submit" 
+                    id="submitBtn"
+                    class="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <i class="fas fa-user-plus mr-2"></i>
+                    Create Account
+                </button>
+            </form>
+            
+            <!-- Login Link -->
+            <div class="mt-6 text-center">
+                <p class="text-gray-600 dark:text-gray-400">
+                    Already have an account?
+                    <a href="/auth/login" class="text-blue-600 hover:text-blue-700 font-semibold">
+                        Login here
+                    </a>
+                </p>
+            </div>
+        </div>
+        
+        <!-- Back to Home -->
+        <div class="mt-4 text-center">
+            <a href="/" class="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
+                <i class="fas fa-arrow-left mr-1"></i>
+                Back to Home
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Load crypto and db modules -->
+<script src="{{ url_for('static', filename='js/db.js') }}"></script>
+<script src="{{ url_for('static', filename='js/crypto.js') }}"></script>
+
+<script>
+    // Theme management
+    function toggleTheme() {
+        const isDark = document.documentElement.classList.toggle('dark');
+        localStorage.setItem('chatify-theme', isDark ? 'dark' : 'light');
+        updateThemeIcon(isDark);
+    }
+    
+    function updateThemeIcon(isDark) {
+        const icon = document.getElementById('themeIcon');
+        if (icon) {
+            icon.className = isDark ? 'fas fa-sun text-yellow-400' : 'fas fa-moon text-gray-600';
+        }
+    }
+    
+    // Initialize theme icon on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        const isDark = document.documentElement.classList.contains('dark');
+        updateThemeIcon(isDark);
+    });
+    
+    // Registration form handling
+    const form = document.getElementById('registerForm');
+    const errorMessage = document.getElementById('errorMessage');
+    const keyGenStatus = document.getElementById('keyGenStatus');
+    const submitBtn = document.getElementById('submitBtn');
+    
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('confirm_password').value;
+        
+        // Hide previous error
+        errorMessage.classList.add('hidden');
+        
+        // Validate passwords match
+        if (password !== confirmPassword) {
+            showError('Passwords do not match');
+            return;
+        }
+        
+        // Disable submit button
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Creating account...';
+        
+        // Show key generation status
+        keyGenStatus.classList.remove('hidden');
+        keyGenStatus.querySelector('span').textContent = 'Initializing secure storage...';
+        
+        try {
+            // Initialize user-specific database first
+            console.log('🔧 Initializing IndexedDB for user:', username);
+            ChatifyDB.initDB(username);
+            await ChatifyDB.db.open();
+            console.log('📦 IndexedDB initialized for', username);
+            
+            keyGenStatus.querySelector('span').textContent = 'Generating encryption keys...';
+            console.log('🔑 Generating identity key pair...');
+            
+            // Generate Identity Key Pair
+            const identityKey = await ChatifyCrypto.generateIdentityKeyPair();
+            await ChatifyDB.storeIdentityKey(identityKey.publicKey, identityKey.privateKey);
+            
+            keyGenStatus.querySelector('span').textContent = 'Generating signed prekey...';
+            console.log('🔑 Generating signed prekey...');
+            
+            // Generate Signed PreKey
+            const signedPreKey = await ChatifyCrypto.generateSignedPreKey(identityKey.keyPair, 1);
+            await ChatifyDB.storeSignedPreKey(
+                signedPreKey.keyId,
+                signedPreKey.publicKey,
+                signedPreKey.privateKey,
+                signedPreKey.signature
+            );
+            
+            keyGenStatus.querySelector('span').textContent = 'Generating one-time prekeys...';
+            console.log('🔑 Generating one-time prekeys...');
+            
+            // Generate One-Time PreKeys
+            const oneTimePreKeys = await ChatifyCrypto.generateOneTimePreKeys(10);
+            await ChatifyDB.storeOneTimePreKeys(oneTimePreKeys);
+            
+            console.log('✅ All keys generated successfully');
+            keyGenStatus.querySelector('span').textContent = 'Registering with server...';
+            
+            // Prepare key bundle for server (only public keys)
+            const keyBundle = {
+                identity_pub: identityKey.publicKey,
+                signed_prekey_pub: signedPreKey.publicKey,
+                signed_prekey_sig: signedPreKey.signature,
+                one_time_prekeys: oneTimePreKeys.map(opk => ({
+                    keyId: opk.keyId,
+                    publicKey: opk.publicKey,
+                    used: false
+                }))
+            };
+            
+            // Send registration request
+            const response = await fetch('/auth/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    username,
+                    password,
+                    ...keyBundle
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                // Registration successful
+                console.log('✅ Registration successful!');
+                alert('Registration successful! Redirecting to chat...');
+                window.location.href = '/chat/';
+            } else {
+                showError(data.error || 'Registration failed');
+            }
+            
+        } catch (error) {
+            showError('Error generating keys. Please try again.');
+            console.error('Registration error:', error);
+        } finally {
+            keyGenStatus.classList.add('hidden');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-user-plus mr-2"></i>Create Account';
+        }
+    });
+    
+    function showError(message) {
+        errorMessage.querySelector('span').textContent = message;
+        errorMessage.classList.remove('hidden');
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,34 @@
+# Flask
+Flask==3.0.0
+Flask-SocketIO==5.3.5
+Flask-CORS==4.0.0
+
+# WebSocket support
+python-socketio==5.10.0
+python-engineio==4.8.0
+eventlet==0.33.3
+
+# MongoDB
+pymongo==4.6.1
+dnspython==2.4.2
+
+# Authentication & Security
+bcrypt==4.1.2
+PyJWT==2.8.0
+
+# Cryptography
+cryptography==41.0.7
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Image processing (optional, for media handling)
+Pillow==10.4.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Development
+black==23.12.1
+flake8==7.0.0

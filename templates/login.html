@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Chatify{% endblock %}
+
+{% block body %}
+<!-- Theme Toggle Button -->
+<button id="themeToggle" onclick="toggleTheme()" class="fixed top-4 right-4 p-3 bg-white dark:bg-gray-800 rounded-lg shadow-lg hover:shadow-xl transition z-50" title="Toggle theme">
+    <i id="themeIcon" class="fas fa-moon text-gray-600 dark:text-gray-400"></i>
+</button>
+
+<div class="min-h-screen flex items-center justify-center px-4 py-12 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800">
+    <div class="max-w-md w-full">
+        <!-- Logo/Header -->
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-full mb-4">
+                <i class="fas fa-shield-alt text-2xl text-white"></i>
+            </div>
+            <h2 class="text-3xl font-bold text-gray-800 dark:text-white">Welcome Back</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-2">Login to continue messaging</p>
+        </div>
+        
+        <!-- Login Form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-8">
+            <form id="loginForm" class="space-y-6">
+                <!-- Username -->
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <i class="fas fa-user mr-1"></i> Username
+                    </label>
+                    <input 
+                        type="text" 
+                        id="username" 
+                        name="username" 
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        placeholder="Enter username"
+                        autocomplete="username"
+                    >
+                </div>
+                
+                <!-- Password -->
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <i class="fas fa-lock mr-1"></i> Password
+                    </label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        required
+                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        placeholder="Enter password"
+                        autocomplete="current-password"
+                    >
+                </div>
+                
+                <!-- Remember Me -->
+                <div class="flex items-center">
+                    <input 
+                        type="checkbox" 
+                        id="remember_me" 
+                        name="remember_me"
+                        class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    >
+                    <label for="remember_me" class="ml-2 block text-sm text-gray-700 dark:text-gray-300">
+                        Remember me
+                    </label>
+                </div>
+                
+                <!-- Error Message -->
+                <div id="errorMessage" class="hidden bg-red-50 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-lg p-3">
+                    <i class="fas fa-exclamation-triangle text-red-600 dark:text-red-400 mr-2"></i>
+                    <span class="text-sm text-red-800 dark:text-red-200"></span>
+                </div>
+                
+                <!-- Submit Button -->
+                <button 
+                    type="submit" 
+                    id="submitBtn"
+                    class="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <i class="fas fa-sign-in-alt mr-2"></i>
+                    Login
+                </button>
+            </form>
+            
+            <!-- Register Link -->
+            <div class="mt-6 text-center">
+                <p class="text-gray-600 dark:text-gray-400">
+                    Don't have an account?
+                    <a href="/auth/register" class="text-blue-600 hover:text-blue-700 font-semibold">
+                        Create one here
+                    </a>
+                </p>
+            </div>
+        </div>
+        
+        <!-- Back to Home -->
+        <div class="mt-4 text-center">
+            <a href="/" class="text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">
+                <i class="fas fa-arrow-left mr-1"></i>
+                Back to Home
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Theme management
+    function toggleTheme() {
+        const isDark = document.documentElement.classList.toggle('dark');
+        localStorage.setItem('chatify-theme', isDark ? 'dark' : 'light');
+        updateThemeIcon(isDark);
+    }
+    
+    function updateThemeIcon(isDark) {
+        const icon = document.getElementById('themeIcon');
+        if (icon) {
+            icon.className = isDark ? 'fas fa-sun text-yellow-400' : 'fas fa-moon text-gray-600';
+        }
+    }
+    
+    // Initialize theme icon on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        const isDark = document.documentElement.classList.contains('dark');
+        updateThemeIcon(isDark);
+    });
+    
+    // Login form handling
+    const form = document.getElementById('loginForm');
+    const errorMessage = document.getElementById('errorMessage');
+    const submitBtn = document.getElementById('submitBtn');
+    
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        const rememberMe = document.getElementById('remember_me').checked;
+        
+        // Hide previous error
+        errorMessage.classList.add('hidden');
+        
+        // Disable submit button
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Logging in...';
+        
+        try {
+            const response = await fetch('/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    username,
+                    password,
+                    remember_me: rememberMe
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                // Login successful
+                window.location.href = '/chat/';
+            } else {
+                showError(data.error || 'Login failed');
+            }
+            
+        } catch (error) {
+            showError('Network error. Please try again.');
+            console.error('Login error:', error);
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i>Login';
+        }
+    });
+    
+    function showError(message) {
+        errorMessage.querySelector('span').textContent = message;
+        errorMessage.classList.remove('hidden');
+    }
+</script>
+{% endblock %}
