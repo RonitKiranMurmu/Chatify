@@ -13,12 +13,13 @@
 
 ## ✅ Deployment Files Created
 
-### 1. **Procfile** 
+### 1. **render.yaml** (Primary Config)
+```yaml
+startCommand: gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:app
 ```
-web: gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:app
-```
-- Tells Render how to start your app
-- Uses Gunicorn with Gevent worker for Socket.IO support (more reliable on Render than eventlet)
+- **Infrastructure as code** for Render deployment
+- Defines service type, build/start commands, environment variables
+- **Note**: Do NOT use Procfile (Heroku format) - it conflicts with render.yaml
 
 ### 2. **render.yaml** (Blueprint)
 - Infrastructure-as-code configuration

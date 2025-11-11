@@ -16,12 +16,12 @@ git commit -m "Add Render deployment configuration"
 git push origin optimized
 ```
 
-**Files added:**
-- ✅ `Procfile`
-- ✅ `render.yaml`
+**Files configured:**
+- ✅ `render.yaml` (deployment config)
 - ✅ `.python-version`
-- ✅ Updated `requirements.txt`
+- ✅ Updated `requirements.txt` (with gevent)
 - ✅ Updated `config.py`
+- ❌ No Procfile needed (conflicts with render.yaml)
 
 ---
 
