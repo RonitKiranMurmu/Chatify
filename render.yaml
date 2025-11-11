@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: chatify
+    env: python
+    region: oregon
+    plan: free
+    branch: optimized
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: False
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MAX_FILE_SIZE
+        value: 16777216
+      - key: UPLOAD_FOLDER
+        value: /tmp/uploads
+      - key: ALLOWED_EXTENSIONS
+        value: jpg,jpeg,png,gif,pdf,doc,docx,txt,mp4,mp3,wav,ogg,webm
+      - key: SESSION_TYPE
+        value: filesystem
+      - key: PERMANENT_SESSION_LIFETIME
+        value: 86400
+      - key: BCRYPT_LOG_ROUNDS
+        value: 12
+      - key: CORS_ORIGINS
+        value: "*"

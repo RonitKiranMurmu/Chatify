@@ -24,6 +24,10 @@ class Config:
         os.getenv('ALLOWED_EXTENSIONS', 'jpg,jpeg,png,gif,pdf,doc,docx,txt,mp4,mp3,wav,ogg,webm').split(',')
     )
     
+    # Use /tmp for uploads on ephemeral filesystems (like Render)
+    if os.getenv('RENDER'):
+        UPLOAD_FOLDER = '/tmp/uploads'
+    
     # Session
     SESSION_TYPE = os.getenv('SESSION_TYPE', 'filesystem')
     PERMANENT_SESSION_LIFETIME = int(os.getenv('PERMANENT_SESSION_LIFETIME', 86400))  # 24 hours
@@ -35,7 +39,7 @@ class Config:
     CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*').split(',')
     
     # Socket.IO
-    SOCKETIO_ASYNC_MODE = 'threading'
+    SOCKETIO_ASYNC_MODE = 'gevent'  # Use gevent for better Render compatibility
     SOCKETIO_CORS_ALLOWED_ORIGINS = CORS_ORIGINS
     
     @staticmethod

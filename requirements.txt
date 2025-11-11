@@ -6,7 +6,8 @@ Flask-CORS==4.0.0
 # WebSocket support
 python-socketio==5.10.0
 python-engineio==4.8.0
-eventlet==0.33.3
+gevent==23.9.1
+gevent-websocket==0.10.1
 
 # MongoDB
 pymongo==4.6.1
@@ -24,6 +25,9 @@ python-dotenv==1.0.0
 
 # Image processing (optional, for media handling)
 Pillow==10.4.0
+
+# Production server
+gunicorn==21.2.0
 
 # Testing
 pytest==7.4.3
